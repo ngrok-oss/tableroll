@@ -1,4 +1,4 @@
-package tableflip
+package tableroll
 
 import (
 	"os"
@@ -6,7 +6,6 @@ import (
 )
 
 var stdEnv = &env{
-	newProc:     newOSProcess,
 	newFile:     os.NewFile,
 	environ:     os.Environ,
 	getenv:      os.Getenv,
@@ -14,7 +13,6 @@ var stdEnv = &env{
 }
 
 type env struct {
-	newProc     func(string, []string, []*os.File, []string) (process, error)
 	newFile     func(fd uintptr, name string) *os.File
 	environ     func() []string
 	getenv      func(string) string

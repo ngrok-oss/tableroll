@@ -1,6 +1,6 @@
 // +build go1.12
 
-package tableflip
+package tableroll
 
 import (
 	"os"

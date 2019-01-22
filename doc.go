@@ -38,4 +38,4 @@
 // you're probably using "go run main.go", for graceful reloads to work,
 // you'll need use "go build main.go".
 //
-package tableflip
+package tableroll

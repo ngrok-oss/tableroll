@@ -1,4 +1,4 @@
-package tableflip
+package tableroll
 
 import (
 	"net"

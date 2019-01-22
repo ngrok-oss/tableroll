@@ -1,7 +1,8 @@
-package tableflip
+package tableroll
 
 import (
 	"io/ioutil"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -29,6 +30,7 @@ type Upgrader struct {
 	*env
 	opts       Options
 	parent     *parent
+	coord      *coordinator
 	readyOnce  sync.Once
 	readyC     chan struct{}
 	stopOnce   sync.Once
@@ -38,6 +40,10 @@ type Upgrader struct {
 	exitFd     neverCloseThisFile // protected by upgradeSem
 	parentErr  error              // protected by upgradeSem
 
+	unixSocket string
+
+	upgradeSock *net.UnixListener
+
 	Fds *Fds
 }
 
@@ -46,10 +52,8 @@ var (
 	stdEnvUpgrader *Upgrader
 )
 
-// New creates a new Upgrader. Files are passed from the parent and may be empty.
-//
-// Only the first call to this function will succeed.
-func New(opts Options) (upg *Upgrader, err error) {
+// TODO
+func New(coordinationDir string, opts Options) (upg *Upgrader, err error) {
 	stdEnvMu.Lock()
 	defer stdEnvMu.Unlock()
 
@@ -57,15 +61,20 @@ func New(opts Options) (upg *Upgrader, err error) {
 		return nil, errors.New("tableflip: only a single Upgrader allowed")
 	}
 
-	upg, err = newUpgrader(stdEnv, opts)
+	upg, err = newUpgrader(stdEnv, coordinationDir, opts)
 	// Store a reference to upg in a private global variable, to prevent
 	// it from being GC'ed and exitFd being closed prematurely.
 	stdEnvUpgrader = upg
 	return
 }
 
-func newUpgrader(env *env, opts Options) (*Upgrader, error) {
-	parent, files, err := newParent(env)
+func newUpgrader(env *env, coordinationDir string, opts Options) (*Upgrader, error) {
+	upgradeListener, err := listenSock(coordinationDir)
+	if err != nil {
+		return nil, errors.Wrapf(err, "error listening on upgrade socket")
+	}
+
+	coord, parent, files, err := newParent(coordinationDir, env)
 	if err != nil {
 		return nil, err
 	}
@@ -75,17 +84,106 @@ func newUpgrader(env *env, opts Options) (*Upgrader, error) {
 	}
 
 	s := &Upgrader{
-		env:        env,
-		opts:       opts,
-		parent:     parent,
-		readyC:     make(chan struct{}),
-		stopC:      make(chan struct{}),
-		upgradeSem: make(chan struct{}, 1),
-		exitC:      make(chan struct{}),
-		Fds:        newFds(files),
+		env:         env,
+		opts:        opts,
+		coord:       coord,
+		parent:      parent,
+		readyC:      make(chan struct{}),
+		stopC:       make(chan struct{}),
+		upgradeSem:  make(chan struct{}, 1),
+		upgradeSock: upgradeListener,
+		exitC:       make(chan struct{}),
+		Fds:         newFds(files),
 	}
 
+	go func() {
+		for {
+			err := s.AwaitUpgrade()
+			if err != nil {
+				// TODO
+				panic(err)
+			}
+		}
+	}()
+
 	return s, nil
+}
+
+func listenSock(coordinationDir string) (*net.UnixListener, error) {
+	listenpath := upgradeSockPath(coordinationDir, os.Getpid())
+	return net.ListenUnix("unix", &net.UnixAddr{
+		Name: listenpath,
+		Net:  "unix",
+	})
+}
+
+func (u *Upgrader) AwaitUpgrade() error {
+	// Acquire semaphore, but don't block. This allows informing
+	// the user that they are doing too many upgrade requests.
+	for {
+		netConn, err := u.upgradeSock.Accept()
+		if err != nil {
+			// TODO:
+			continue
+		}
+		// We got a request, only handle one request at a time via semaphore..
+		conn := netConn.(*net.UnixConn)
+
+		select {
+		default:
+			// TODO: err
+			return errors.New("upgrade in progress")
+		case u.upgradeSem <- struct{}{}:
+		}
+
+		defer func() {
+			<-u.upgradeSem
+		}()
+
+		// Make sure we're still ok to perform an upgrade.
+		select {
+		case <-u.exitC:
+			// TODO: err
+			return errors.New("already upgraded")
+		default:
+		}
+
+		select {
+		case <-u.readyC:
+		default:
+			// TODO: err
+			return errors.New("TODO")
+		}
+
+		// time to pass our FDs along
+		child, err := startChild(conn, u.Fds.copy())
+		if err != nil {
+			return errors.Wrap(err, "can't start child")
+		}
+
+		readyTimeout := time.After(u.opts.UpgradeTimeout)
+		select {
+		case err := <-child.exitedC:
+			if err == nil {
+				return errors.Errorf("child %s exited", child)
+			}
+			return errors.Wrapf(err, "child %s exited", child)
+
+		case <-u.stopC:
+			return errors.New("terminating")
+
+		case <-readyTimeout:
+			return errors.Errorf("new child %s timed out", child)
+
+		case file := <-child.readyC:
+			// Save file in exitFd, so that it's only closed when the process
+			// exits. This signals to the new process that the old process
+			// has exited.
+			u.exitFd = neverCloseThisFile{file}
+			close(u.exitC)
+			return nil
+		}
+	}
 }
 
 // Ready signals that the current process is ready to accept connections.
@@ -105,6 +203,13 @@ func (u *Upgrader) Ready() error {
 	}
 
 	if u.parent == nil {
+		// we are the parent!
+		if err := u.coord.BecomeParent(); err != nil {
+			return err
+		}
+		if err := u.coord.Unlock(); err != nil {
+			return err
+		}
 		return nil
 	}
 	return u.parent.sendReady()
@@ -135,82 +240,6 @@ func (u *Upgrader) Stop() {
 
 		u.Fds.closeUsed()
 	})
-}
-
-// Upgrade triggers an upgrade.
-func (u *Upgrader) Upgrade() error {
-	// Acquire semaphore, but don't block. This allows informing
-	// the user that they are doing too many upgrade requests.
-	select {
-	default:
-		return errors.New("upgrade in progress")
-	case u.upgradeSem <- struct{}{}:
-	}
-
-	defer func() {
-		<-u.upgradeSem
-	}()
-
-	// Make sure we're still ok to perform an upgrade.
-	select {
-	case <-u.exitC:
-		return errors.New("already upgraded")
-	default:
-	}
-
-	if u.parent != nil {
-		if u.parentErr != nil {
-			return u.parentErr
-		}
-
-		// verify clean exit
-		select {
-		case err := <-u.parent.exited:
-			if err != nil {
-				u.parentErr = err
-				return err
-			}
-
-		default:
-			return errors.New("parent hasn't exited")
-		}
-	}
-
-	select {
-	case <-u.readyC:
-	default:
-		return errors.New("process is not ready")
-	}
-
-	child, err := startChild(u.env, u.Fds.copy())
-	if err != nil {
-		return errors.Wrap(err, "can't start child")
-	}
-
-	readyTimeout := time.After(u.opts.UpgradeTimeout)
-	select {
-	case err := <-child.exitedC:
-		if err == nil {
-			return errors.Errorf("child %s exited", child)
-		}
-		return errors.Wrapf(err, "child %s exited", child)
-
-	case <-u.stopC:
-		child.Kill()
-		return errors.New("terminating")
-
-	case <-readyTimeout:
-		child.Kill()
-		return errors.Errorf("new child %s timed out", child)
-
-	case file := <-child.readyC:
-		// Save file in exitFd, so that it's only closed when the process
-		// exits. This signals to the new process that the old process
-		// has exited.
-		u.exitFd = neverCloseThisFile{file}
-		close(u.exitC)
-		return nil
-	}
 }
 
 // This file must never be closed by the Go runtime, since its used by the
