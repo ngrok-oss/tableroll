@@ -1,41 +1,21 @@
-// Package tableflip implements zero downtime upgrades.
+// Package shakiin implements zero downtime upgrades between unrelated processes.
 //
-// An upgrade spawns a new copy of argv[0] and passes
-// file descriptors of used listening sockets to the new process. The old process exits
-// once the new process signals readiness. Thus new code can use sockets allocated
-// in the old process. This is similar to the approach used by nginx, but
-// as a library.
+// An upgrade is coordinated over a well-known coordination directory. Any
+// number of processes may be run at once that coordinate upgrades on that
+// directory, and between those many processes, one will be chosen to own all
+// shareable / upgradeable file descriptors.
+// Each upgrade will uniquely involve two processes, and unix exclusive locks
+// on the filesystme will coordinate that.
 //
-// At any point in time there are one or two processes, with at most one of them
-// in non-ready state. A successful upgrade fully replaces all old configuration
-// and code.
+// Each process under shakiin should be able to signal readiness, which will
+// indicate to shakiin that it is safe for previous processes to begin draining.
 //
-// To use this library with systemd you need to use the PIDFile option in the service
-// file.
+// Optionally, a process under shakiin may also indicate that it should exit in
+// a given time after it begins draining.
 //
-//    [Unit]
-//    Description=Service using tableflip
-//
-//    [Service]
-//    ExecStart=/path/to/binary -some-flag /path/to/pid-file
-//    ExecReload=/bin/kill -HUP $MAINPID
-//    PIDFile=/path/to/pid-file
-//
-// Then pass /path/to/pid-file to New. You can use systemd-run to
-// test your implementation:
-//
-//    systemd-run --user -p PIDFile=/path/to/pid-file /path/to/binary
-//
-// systemd-run will print a unit name, which you can use with systemctl to
-// inspect the service.
-//
-// NOTES:
-//
-// Requires at least Go 1.9, since there is a race condition on the
-// pipes used for communication between parent and child.
-//
-// If you're seeing "can't start process: no such file or directory",
-// you're probably using "go run main.go", for graceful reloads to work,
-// you'll need use "go build main.go".
-//
+// Unlike other upgrade mechanisms in this space, it is expected that a new
+// binary is started independently, such as in a new container, not as a child
+// of the existing one. How a new upgrade is started is entirely out of scope
+// of this library. Both copies of the process must have access to the same
+// coordination directory, but other than that, it's fine.
 package shakiin
