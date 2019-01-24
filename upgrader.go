@@ -16,19 +16,13 @@ import (
 // readiness notification was received.
 const DefaultUpgradeTimeout time.Duration = time.Minute
 
-// Options control the behaviour of the Upgrader.
-type Options struct {
-	// Time after which an upgrade is considered failed. Defaults to
-	// DefaultUpgradeTimeout.
-	UpgradeTimeout time.Duration
-	// The PID of a ready process is written to this file.
-	PIDFile string
-}
-
 // Upgrader handles zero downtime upgrades and passing files between processes.
 type Upgrader struct {
 	*env
-	opts       Options
+
+	upgradeTimeout time.Duration
+	pidFile        string
+
 	parent     *parent
 	coord      *coordinator
 	readyOnce  sync.Once
@@ -52,8 +46,28 @@ var (
 	stdEnvUpgrader *Upgrader
 )
 
-// TODO
-func New(coordinationDir string, opts Options) (upg *Upgrader, err error) {
+type Option func(u *Upgrader)
+
+// WithUpgradeTimeout allows configuring the update timeout. If a time of 0 is
+// specified, the default will be used.
+func WithUpgradeTimeout(t time.Duration) Option {
+	return func(u *Upgrader) {
+		u.upgradeTimeout = t
+		if u.upgradeTimeout <= 0 {
+			u.upgradeTimeout = DefaultUpgradeTimeout
+		}
+	}
+}
+
+// WithPidFile allows configuring the update timeout. If a time of 0 is
+// specified, the default will be used.
+func WithPidFile(path string) Option {
+	return func(u *Upgrader) {
+		u.pidFile = path
+	}
+}
+
+func New(coordinationDir string, opts ...Option) (upg *Upgrader, err error) {
 	stdEnvMu.Lock()
 	defer stdEnvMu.Unlock()
 
@@ -61,14 +75,14 @@ func New(coordinationDir string, opts Options) (upg *Upgrader, err error) {
 		return nil, errors.New("tableflip: only a single Upgrader allowed")
 	}
 
-	upg, err = newUpgrader(stdEnv, coordinationDir, opts)
+	upg, err = newUpgrader(stdEnv, coordinationDir, opts...)
 	// Store a reference to upg in a private global variable, to prevent
 	// it from being GC'ed and exitFd being closed prematurely.
 	stdEnvUpgrader = upg
 	return
 }
 
-func newUpgrader(env *env, coordinationDir string, opts Options) (*Upgrader, error) {
+func newUpgrader(env *env, coordinationDir string, opts ...Option) (*Upgrader, error) {
 	upgradeListener, err := listenSock(coordinationDir)
 	if err != nil {
 		return nil, errors.Wrapf(err, "error listening on upgrade socket")
@@ -79,21 +93,21 @@ func newUpgrader(env *env, coordinationDir string, opts Options) (*Upgrader, err
 		return nil, err
 	}
 
-	if opts.UpgradeTimeout <= 0 {
-		opts.UpgradeTimeout = DefaultUpgradeTimeout
+	s := &Upgrader{
+		env:            env,
+		upgradeTimeout: DefaultUpgradeTimeout,
+		coord:          coord,
+		parent:         parent,
+		readyC:         make(chan struct{}),
+		stopC:          make(chan struct{}),
+		upgradeSem:     make(chan struct{}, 1),
+		upgradeSock:    upgradeListener,
+		exitC:          make(chan struct{}),
+		Fds:            newFds(files),
 	}
 
-	s := &Upgrader{
-		env:         env,
-		opts:        opts,
-		coord:       coord,
-		parent:      parent,
-		readyC:      make(chan struct{}),
-		stopC:       make(chan struct{}),
-		upgradeSem:  make(chan struct{}, 1),
-		upgradeSock: upgradeListener,
-		exitC:       make(chan struct{}),
-		Fds:         newFds(files),
+	for _, opt := range opts {
+		opt(s)
 	}
 
 	go func() {
@@ -118,8 +132,6 @@ func listenSock(coordinationDir string) (*net.UnixListener, error) {
 }
 
 func (u *Upgrader) AwaitUpgrade() error {
-	// Acquire semaphore, but don't block. This allows informing
-	// the user that they are doing too many upgrade requests.
 	for {
 		netConn, err := u.upgradeSock.Accept()
 		if err != nil {
@@ -129,6 +141,8 @@ func (u *Upgrader) AwaitUpgrade() error {
 		// We got a request, only handle one request at a time via semaphore..
 		conn := netConn.(*net.UnixConn)
 
+		// Acquire semaphore, but don't block. This allows informing
+		// the user that they are doing too many upgrade requests.
 		select {
 		default:
 			// TODO: err
@@ -161,7 +175,7 @@ func (u *Upgrader) AwaitUpgrade() error {
 			return errors.Wrap(err, "can't start child")
 		}
 
-		readyTimeout := time.After(u.opts.UpgradeTimeout)
+		readyTimeout := time.After(u.upgradeTimeout)
 		select {
 		case err := <-child.exitedC:
 			if err == nil {
@@ -196,8 +210,8 @@ func (u *Upgrader) Ready() error {
 		close(u.readyC)
 	})
 
-	if u.opts.PIDFile != "" {
-		if err := writePIDFile(u.opts.PIDFile); err != nil {
+	if u.pidFile != "" {
+		if err := writePIDFile(u.pidFile); err != nil {
 			return errors.Wrap(err, "tableflip: can't write PID file")
 		}
 	}
