@@ -1,11 +1,8 @@
 package shakiin
 
 import (
-	"io/ioutil"
 	"net"
 	"os"
-	"path/filepath"
-	"strconv"
 	"sync"
 	"time"
 
@@ -24,7 +21,6 @@ var (
 // Upgrader handles zero downtime upgrades and passing files between processes.
 type Upgrader struct {
 	upgradeTimeout time.Duration
-	pidFile        string
 
 	parent     *parent
 	coord      *coordinator
@@ -54,14 +50,6 @@ func WithUpgradeTimeout(t time.Duration) Option {
 		if u.upgradeTimeout <= 0 {
 			u.upgradeTimeout = DefaultUpgradeTimeout
 		}
-	}
-}
-
-// WithPidFile allows configuring the update timeout. If a time of 0 is
-// specified, the default will be used.
-func WithPidFile(path string) Option {
-	return func(u *Upgrader) {
-		u.pidFile = path
 	}
 }
 
@@ -206,12 +194,6 @@ func (u *Upgrader) Ready() error {
 		close(u.readyC)
 	})
 
-	if u.pidFile != "" {
-		if err := writePIDFile(u.pidFile); err != nil {
-			return errors.Wrap(err, "tableflip: can't write PID file")
-		}
-	}
-
 	if u.parent == nil {
 		// we are the parent!
 		if err := u.coord.BecomeParent(); err != nil {
@@ -259,22 +241,4 @@ func (u *Upgrader) Stop() {
 // it from an Upgrader.
 type neverCloseThisFile struct {
 	file *os.File
-}
-
-func writePIDFile(path string) error {
-	dir, file := filepath.Split(path)
-	fh, err := ioutil.TempFile(dir, file)
-	if err != nil {
-		return err
-	}
-	defer fh.Close()
-	// Remove temporary PID file if something fails
-	defer os.Remove(fh.Name())
-
-	_, err = fh.WriteString(strconv.Itoa(os.Getpid()))
-	if err != nil {
-		return err
-	}
-
-	return os.Rename(fh.Name(), path)
 }
