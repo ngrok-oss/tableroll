@@ -1,6 +1,6 @@
 // +build go1.12
 
-package tableroll
+package shakiin
 
 import (
 	"os"
