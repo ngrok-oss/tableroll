@@ -28,7 +28,7 @@ func pidIsDead(pid int) bool {
 	return proc.Signal(syscall.Signal(0)) != nil
 }
 
-func newParent(coordinationDir string, env *env) (*coordinator, *parent, map[fileName]*file, error) {
+func newParent(coordinationDir string) (*coordinator, *parent, map[fileName]*file, error) {
 	coord, err := LockCoordinationDir(coordinationDir)
 	if err != nil {
 		return nil, nil, nil, err
@@ -69,7 +69,7 @@ func newParent(coordinationDir string, env *env) (*coordinator, *parent, map[fil
 		copy(key[:], parts)
 
 		files[key] = &file{
-			env.newFile(sockFiles[i].Fd(), key.String()),
+			os.NewFile(sockFiles[i].Fd(), key.String()),
 			sockFiles[i].Fd(),
 		}
 	}

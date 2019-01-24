@@ -16,10 +16,13 @@ import (
 // readiness notification was received.
 const DefaultUpgradeTimeout time.Duration = time.Minute
 
+var (
+	stdEnvMu       sync.Mutex
+	stdEnvUpgrader *Upgrader
+)
+
 // Upgrader handles zero downtime upgrades and passing files between processes.
 type Upgrader struct {
-	*env
-
 	upgradeTimeout time.Duration
 	pidFile        string
 
@@ -40,11 +43,6 @@ type Upgrader struct {
 
 	Fds *Fds
 }
-
-var (
-	stdEnvMu       sync.Mutex
-	stdEnvUpgrader *Upgrader
-)
 
 type Option func(u *Upgrader)
 
@@ -70,31 +68,29 @@ func WithPidFile(path string) Option {
 func New(coordinationDir string, opts ...Option) (upg *Upgrader, err error) {
 	stdEnvMu.Lock()
 	defer stdEnvMu.Unlock()
-
 	if stdEnvUpgrader != nil {
 		return nil, errors.New("tableflip: only a single Upgrader allowed")
 	}
 
-	upg, err = newUpgrader(stdEnv, coordinationDir, opts...)
+	upg, err = newUpgrader(coordinationDir, opts...)
 	// Store a reference to upg in a private global variable, to prevent
 	// it from being GC'ed and exitFd being closed prematurely.
 	stdEnvUpgrader = upg
 	return
 }
 
-func newUpgrader(env *env, coordinationDir string, opts ...Option) (*Upgrader, error) {
+func newUpgrader(coordinationDir string, opts ...Option) (*Upgrader, error) {
 	upgradeListener, err := listenSock(coordinationDir)
 	if err != nil {
 		return nil, errors.Wrapf(err, "error listening on upgrade socket")
 	}
 
-	coord, parent, files, err := newParent(coordinationDir, env)
+	coord, parent, files, err := newParent(coordinationDir)
 	if err != nil {
 		return nil, err
 	}
 
 	s := &Upgrader{
-		env:            env,
 		upgradeTimeout: DefaultUpgradeTimeout,
 		coord:          coord,
 		parent:         parent,
