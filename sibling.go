@@ -11,7 +11,7 @@ import (
 
 type sibling struct {
 	readyR, namesW *os.File
-	readyC         <-chan *os.File
+	readyC         chan *os.File
 	exitedC        <-chan error
 	doneC          <-chan struct{}
 	conn           *net.UnixConn
@@ -44,13 +44,13 @@ func startSibling(l log15.Logger, conn *net.UnixConn, passedFiles map[fileName]*
 		l:       l,
 	}
 	go c.writeFiles(fdNames, fds)
-	go c.waitReady(readyC)
 	return c, nil
 }
 
 func (c *sibling) waitReady(readyC chan<- *os.File) {
 	var b [1]byte
-	if n, _ := c.readyR.Read(b[:]); n > 0 && b[0] == notifyReady {
+	if n, _ := c.conn.Read(b[:]); n > 0 && b[0] == notifyReady {
+		c.l.Debug("our sibling sent us a ready")
 		// We know that writeFiles has finished now.
 		// TODO: signal the sibling that we're exiting
 		readyC <- c.namesW
@@ -72,7 +72,19 @@ func (c *sibling) writeFiles(names [][]string, fds []*os.File) {
 
 	err := fdsock.Put(c.conn, fds...)
 	if err != nil {
-		// TODO:
+		// TODO: this should *not* be a panic for sure
 		panic(err)
 	}
+
+	// Finally, read ready
+	var b [1]byte
+	if n, _ := c.conn.Read(b[:]); n > 0 && b[0] == notifyReady {
+		c.l.Debug("our sibling sent us a ready")
+		// We know that writeFiles has finished now.
+		// TODO: signal the sibling that we're exiting
+		c.readyC <- c.namesW
+	} else {
+		c.l.Debug("our sibling failed to send us a ready")
+	}
+	c.readyR.Close()
 }
