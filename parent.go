@@ -54,7 +54,9 @@ func newParent(coordinationDir string) (*coordinator, *parent, map[fileName]*fil
 	sockFileNames := make([]string, 0, len(files))
 	for _, parts := range names {
 		// parts[2] is the 'addr', which is the best we've got for a filename.
-		// TODO: should we just use 'key.String()' like is used in newFile?
+		// TODO(euank): should we just use 'key.String()' like is used in newFile?
+		// I want to check this by seeing what the 'filename' is on each end and if
+		// it changes from the parent process to the next parent with how I have this.
 		sockFileNames = append(sockFileNames, parts[2])
 	}
 	sockFiles, err := fdsock.Get(sock, len(sockFileNames), sockFileNames)

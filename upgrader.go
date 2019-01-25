@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
 )
 
@@ -37,6 +38,8 @@ type Upgrader struct {
 
 	upgradeSock *net.UnixListener
 
+	l log15.Logger
+
 	Fds *Fds
 }
 
@@ -50,6 +53,12 @@ func WithUpgradeTimeout(t time.Duration) Option {
 		if u.upgradeTimeout <= 0 {
 			u.upgradeTimeout = DefaultUpgradeTimeout
 		}
+	}
+}
+
+func WithLogger(l log15.Logger) Option {
+	return func(u *Upgrader) {
+		u.l = l
 	}
 }
 
@@ -78,6 +87,8 @@ func newUpgrader(coordinationDir string, opts ...Option) (*Upgrader, error) {
 		return nil, err
 	}
 
+	noopLogger := log15.New()
+	noopLogger.SetHandler(log15.DiscardHandler())
 	s := &Upgrader{
 		upgradeTimeout: DefaultUpgradeTimeout,
 		coord:          coord,
@@ -88,6 +99,7 @@ func newUpgrader(coordinationDir string, opts ...Option) (*Upgrader, error) {
 		upgradeSock:    upgradeListener,
 		exitC:          make(chan struct{}),
 		Fds:            newFds(files),
+		l:              noopLogger,
 	}
 
 	for _, opt := range opts {
