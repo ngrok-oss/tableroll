@@ -154,26 +154,26 @@ func (u *Upgrader) AwaitUpgrade() error {
 		}
 
 		// time to pass our FDs along
-		child, err := startChild(conn, u.Fds.copy())
+		nextParent, err := startSibling(conn, u.Fds.copy())
 		if err != nil {
-			return errors.Wrap(err, "can't start child")
+			return errors.Wrap(err, "can't start next parent")
 		}
 
 		readyTimeout := time.After(u.upgradeTimeout)
 		select {
-		case err := <-child.exitedC:
+		case err := <-nextParent.exitedC:
 			if err == nil {
-				return errors.Errorf("child %s exited", child)
+				return errors.Errorf("next parent %s exited", nextParent)
 			}
-			return errors.Wrapf(err, "child %s exited", child)
+			return errors.Wrapf(err, "next parent %s exited", nextParent)
 
 		case <-u.stopC:
 			return errors.New("terminating")
 
 		case <-readyTimeout:
-			return errors.Errorf("new child %s timed out", child)
+			return errors.Errorf("new parent %s timed out", nextParent)
 
-		case file := <-child.readyC:
+		case file := <-nextParent.readyC:
 			// Save file in exitFd, so that it's only closed when the process
 			// exits. This signals to the new process that the old process
 			// has exited.

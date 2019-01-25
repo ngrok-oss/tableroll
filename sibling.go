@@ -8,7 +8,7 @@ import (
 	fdsock "github.com/ftrvxmtrx/fd"
 )
 
-type child struct {
+type sibling struct {
 	readyR, namesW *os.File
 	readyC         <-chan *os.File
 	exitedC        <-chan error
@@ -16,11 +16,11 @@ type child struct {
 	conn           *net.UnixConn
 }
 
-func (c *child) String() string {
+func (c *sibling) String() string {
 	return c.conn.RemoteAddr().String()
 }
 
-func startChild(conn *net.UnixConn, passedFiles map[fileName]*file) (*child, error) {
+func startSibling(conn *net.UnixConn, passedFiles map[fileName]*file) (*sibling, error) {
 	fds := make([]*os.File, 0, len(passedFiles))
 	fdNames := make([][]string, 0, len(passedFiles))
 	for name, file := range passedFiles {
@@ -34,7 +34,7 @@ func startChild(conn *net.UnixConn, passedFiles map[fileName]*file) (*child, err
 	exitedC := make(chan error, 1)
 	readyC := make(chan *os.File, 1)
 
-	c := &child{
+	c := &sibling{
 		conn:    conn,
 		readyC:  readyC,
 		exitedC: exitedC,
@@ -45,7 +45,7 @@ func startChild(conn *net.UnixConn, passedFiles map[fileName]*file) (*child, err
 	return c, nil
 }
 
-func (c *child) waitReady(readyC chan<- *os.File) {
+func (c *sibling) waitReady(readyC chan<- *os.File) {
 	var b [1]byte
 	if n, _ := c.readyR.Read(b[:]); n > 0 && b[0] == notifyReady {
 		// We know that writeFiles has finished now.
@@ -55,7 +55,7 @@ func (c *child) waitReady(readyC chan<- *os.File) {
 	c.readyR.Close()
 }
 
-func (c *child) writeFiles(names [][]string, fds []*os.File) {
+func (c *sibling) writeFiles(names [][]string, fds []*os.File) {
 	enc := gob.NewEncoder(c.conn)
 	if names == nil {
 		// Gob panics on nil

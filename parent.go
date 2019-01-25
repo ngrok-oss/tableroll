@@ -83,7 +83,7 @@ func newParent(coordinationDir string) (*coordinator, *parent, map[fileName]*fil
 		if n != 0 {
 			exited <- errors.New("unexpected data from parent process")
 		} else if err != nil {
-			exited <- errors.Wrap(err, "unexpected error while waiting for parent to exit")
+			exited <- errors.Wrap(err, "unexpected error while waiting for previous parent to exit")
 		}
 		close(exited)
 	}()
@@ -100,7 +100,7 @@ func (ps *parent) sendReady() error {
 	if _, err := ps.wr.Write([]byte{notifyReady}); err != nil {
 		return errors.Wrap(err, "can't notify parent process")
 	}
-	// Now that we're ready and the old process is drained, relinquish the lock
+	// Now that we're ready and the old process is draining, take over and relinquish the lock.
 	if err := ps.coordinator.BecomeParent(); err != nil {
 		return err
 	}
