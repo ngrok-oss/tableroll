@@ -6,6 +6,7 @@ import (
 	"os"
 
 	fdsock "github.com/ftrvxmtrx/fd"
+	"github.com/inconshreveable/log15"
 )
 
 type sibling struct {
@@ -14,13 +15,14 @@ type sibling struct {
 	exitedC        <-chan error
 	doneC          <-chan struct{}
 	conn           *net.UnixConn
+	l              log15.Logger
 }
 
 func (c *sibling) String() string {
 	return c.conn.RemoteAddr().String()
 }
 
-func startSibling(conn *net.UnixConn, passedFiles map[fileName]*file) (*sibling, error) {
+func startSibling(l log15.Logger, conn *net.UnixConn, passedFiles map[fileName]*file) (*sibling, error) {
 	fds := make([]*os.File, 0, len(passedFiles))
 	fdNames := make([][]string, 0, len(passedFiles))
 	for name, file := range passedFiles {
@@ -39,6 +41,7 @@ func startSibling(conn *net.UnixConn, passedFiles map[fileName]*file) (*sibling,
 		readyC:  readyC,
 		exitedC: exitedC,
 		doneC:   doneC,
+		l:       l,
 	}
 	go c.writeFiles(fdNames, fds)
 	go c.waitReady(readyC)
@@ -51,11 +54,14 @@ func (c *sibling) waitReady(readyC chan<- *os.File) {
 		// We know that writeFiles has finished now.
 		// TODO: signal the sibling that we're exiting
 		readyC <- c.namesW
+	} else {
+		c.l.Debug("our sibling failed to send us a ready")
 	}
 	c.readyR.Close()
 }
 
 func (c *sibling) writeFiles(names [][]string, fds []*os.File) {
+	c.l.Info("passing along fds to our sibling", "numfds", len(fds))
 	enc := gob.NewEncoder(c.conn)
 	if names == nil {
 		// Gob panics on nil

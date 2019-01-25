@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	fdsock "github.com/ftrvxmtrx/fd"
+	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
 )
 
@@ -21,6 +22,7 @@ type parent struct {
 	wr          *net.UnixConn
 	exited      <-chan error
 	coordinator *coordinator
+	l           log15.Logger
 }
 
 func pidIsDead(pid int) bool {
@@ -28,8 +30,8 @@ func pidIsDead(pid int) bool {
 	return proc.Signal(syscall.Signal(0)) != nil
 }
 
-func newParent(coordinationDir string) (*coordinator, *parent, map[fileName]*file, error) {
-	coord, err := LockCoordinationDir(coordinationDir)
+func newParent(l log15.Logger, coordinationDir string) (*coordinator, *parent, map[fileName]*file, error) {
+	coord, err := LockCoordinationDir(l, coordinationDir)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -42,12 +44,15 @@ func newParent(coordinationDir string) (*coordinator, *parent, map[fileName]*fil
 		return coord, nil, nil, err
 	}
 
+	l.Info("connected to parents, getting fds")
 	// First get the names of files to expect. This also lets us know how many FDs to get
 	var names [][]string
 	dec := gob.NewDecoder(sock)
 	if err := dec.Decode(&names); err != nil {
 		return coord, nil, nil, errors.Wrap(err, "can't decode names from parent process")
 	}
+
+	l.Debug("expecting files", "names", names)
 
 	// Now grab all the FDs from the parent from the socket
 	files := make(map[fileName]*file, len(names))
@@ -75,6 +80,7 @@ func newParent(coordinationDir string) (*coordinator, *parent, map[fileName]*fil
 			sockFiles[i].Fd(),
 		}
 	}
+	l.Info("got fds from old parent", "numfds", len(files))
 
 	// now that we have the FDs from the old parent, we just need to tell it when we're ready and then we're done and happy!
 
@@ -94,6 +100,7 @@ func newParent(coordinationDir string) (*coordinator, *parent, map[fileName]*fil
 		wr:          sock,
 		exited:      exited,
 		coordinator: coord,
+		l:           l,
 	}, files, nil
 }
 
@@ -102,6 +109,7 @@ func (ps *parent) sendReady() error {
 	if _, err := ps.wr.Write([]byte{notifyReady}); err != nil {
 		return errors.Wrap(err, "can't notify parent process")
 	}
+	ps.l.Info("notified the parent process we're ready")
 	// Now that we're ready and the old process is draining, take over and relinquish the lock.
 	if err := ps.coordinator.BecomeParent(); err != nil {
 		return err

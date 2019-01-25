@@ -82,36 +82,35 @@ func newUpgrader(coordinationDir string, opts ...Option) (*Upgrader, error) {
 		return nil, errors.Wrapf(err, "error listening on upgrade socket")
 	}
 
-	coord, parent, files, err := newParent(coordinationDir)
-	if err != nil {
-		return nil, err
-	}
-
 	noopLogger := log15.New()
 	noopLogger.SetHandler(log15.DiscardHandler())
 	s := &Upgrader{
 		upgradeTimeout: DefaultUpgradeTimeout,
-		coord:          coord,
-		parent:         parent,
 		readyC:         make(chan struct{}),
 		stopC:          make(chan struct{}),
 		upgradeSem:     make(chan struct{}, 1),
 		upgradeSock:    upgradeListener,
 		exitC:          make(chan struct{}),
-		Fds:            newFds(files),
 		l:              noopLogger,
 	}
-
 	for _, opt := range opts {
 		opt(s)
 	}
+
+	coord, parent, files, err := newParent(s.l, coordinationDir)
+	if err != nil {
+		return nil, err
+	}
+	s.coord = coord
+	s.parent = parent
+	s.Fds = newFds(files)
 
 	go func() {
 		for {
 			err := s.AwaitUpgrade()
 			if err != nil {
 				// TODO
-				panic(err)
+				s.l.Error("error awaiting upgrade", "err", err)
 			}
 		}
 	}()
@@ -131,17 +130,15 @@ func (u *Upgrader) AwaitUpgrade() error {
 	for {
 		netConn, err := u.upgradeSock.Accept()
 		if err != nil {
-			// TODO:
-			continue
+			return errors.Wrap(err, "error accepting upgrade socket request")
 		}
-		// We got a request, only handle one request at a time via semaphore..
 		conn := netConn.(*net.UnixConn)
 
+		// We got a request, only handle one request at a time via semaphore..
 		// Acquire semaphore, but don't block. This allows informing
 		// the user that they are doing too many upgrade requests.
 		select {
 		default:
-			// TODO: err
 			return errors.New("upgrade in progress")
 		case u.upgradeSem <- struct{}{}:
 		}
@@ -153,7 +150,6 @@ func (u *Upgrader) AwaitUpgrade() error {
 		// Make sure we're still ok to perform an upgrade.
 		select {
 		case <-u.exitC:
-			// TODO: err
 			return errors.New("already upgraded")
 		default:
 		}
@@ -165,8 +161,9 @@ func (u *Upgrader) AwaitUpgrade() error {
 			return errors.New("TODO")
 		}
 
+		u.l.Info("passing along the torch")
 		// time to pass our FDs along
-		nextParent, err := startSibling(conn, u.Fds.copy())
+		nextParent, err := startSibling(u.l, conn, u.Fds.copy())
 		if err != nil {
 			return errors.Wrap(err, "can't start next parent")
 		}
@@ -189,6 +186,7 @@ func (u *Upgrader) AwaitUpgrade() error {
 			// Save file in exitFd, so that it's only closed when the process
 			// exits. This signals to the new process that the old process
 			// has exited.
+			// TODO: is this a thing?
 			u.exitFd = neverCloseThisFile{file}
 			close(u.exitC)
 			return nil
