@@ -28,6 +28,9 @@ type coordinator struct {
 	lock *lock.FileLock
 	dir  string
 	l    log15.Logger
+
+	// mocks
+	os osIface
 }
 
 func touchFile(path string) error {
@@ -38,9 +41,9 @@ func touchFile(path string) error {
 // LockCoordinationDir takes an exclusive lock on the given coordination
 // directory. It returns a coordinator that holds the lock and may be used to
 // manipulate the directory. If the directory is already locked, the function will block until the lock can be acquired.
-func lockCoordinationDir(l log15.Logger, dir string) (*coordinator, error) {
+func lockCoordinationDir(os osIface, l log15.Logger, dir string) (*coordinator, error) {
 	l = l.New("dir", dir)
-	coord := &coordinator{dir: dir, l: l}
+	coord := &coordinator{dir: dir, l: l, os: os}
 	pidPath := coord.pidFile()
 	if err := touchFile(pidPath); err != nil {
 		return nil, err
@@ -61,7 +64,7 @@ func (c *coordinator) pidFile() string {
 
 func (c *coordinator) BecomeParent() error {
 	c.l.Info("writing pid to become parent")
-	return ioutil.WriteFile(c.pidFile(), []byte(strconv.Itoa(os.Getpid())), 0755)
+	return ioutil.WriteFile(c.pidFile(), []byte(strconv.Itoa(c.os.Getpid())), 0755)
 }
 
 func (c *coordinator) Unlock() error {

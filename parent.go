@@ -31,8 +31,8 @@ func pidIsDead(pid int) bool {
 	return proc.Signal(syscall.Signal(0)) != nil
 }
 
-func newParent(l log15.Logger, coordinationDir string) (*coordinator, *parent, map[fileName]*file, error) {
-	coord, err := lockCoordinationDir(l, coordinationDir)
+func newParent(l log15.Logger, osi osIface, coordinationDir string) (*coordinator, *parent, map[fileName]*file, error) {
+	coord, err := lockCoordinationDir(osi, l, coordinationDir)
 	if err != nil {
 		return nil, nil, nil, err
 	}

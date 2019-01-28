@@ -33,6 +33,9 @@ type Upgrader struct {
 	l log15.Logger
 
 	Fds *Fds
+
+	// mocks
+	os osIface
 }
 
 // Option is an option function for Upgrader.
@@ -66,7 +69,11 @@ func WithLogger(l log15.Logger) Option {
 // Canonically, this directory is `/run/${program}/tableroll/`.
 // Any number of options to configure tableroll may also be provided.
 func New(coordinationDir string, opts ...Option) (upg *Upgrader, err error) {
-	upgradeListener, err := listenSock(coordinationDir)
+	return newUpgrader(realOS{}, coordinationDir, opts...)
+}
+
+func newUpgrader(os osIface, coordinationDir string, opts ...Option) (upg *Upgrader, err error) {
+	upgradeListener, err := listenSock(os, coordinationDir)
 	if err != nil {
 		return nil, errors.Wrapf(err, "error listening on upgrade socket")
 	}
@@ -81,12 +88,13 @@ func New(coordinationDir string, opts ...Option) (upg *Upgrader, err error) {
 		upgradeSock:    upgradeListener,
 		exitC:          make(chan struct{}),
 		l:              noopLogger,
+		os:             realOS{},
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
 
-	coord, parent, files, err := newParent(s.l, coordinationDir)
+	coord, parent, files, err := newParent(s.l, s.os, coordinationDir)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +114,7 @@ func New(coordinationDir string, opts ...Option) (upg *Upgrader, err error) {
 	return s, nil
 }
 
-func listenSock(coordinationDir string) (*net.UnixListener, error) {
+func listenSock(os osIface, coordinationDir string) (*net.UnixListener, error) {
 	listenpath := upgradeSockPath(coordinationDir, os.Getpid())
 	return net.ListenUnix("unix", &net.UnixAddr{
 		Name: listenpath,
