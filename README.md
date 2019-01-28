@@ -1,60 +1,18 @@
-# Graceful process restarts in Go
+# tableroll &mdash; Coordinate upgrades between processes
 
-[![](https://godoc.org/github.com/cloudflare/tableflip?status.svg)](https://godoc.org/github.com/cloudflare/tableflip)
+tableroll is a graceful upgrade process for network services. It allows
+zero-downtime upgrades (such that the listening socket never drops a
+connection) between multiple go processes.
 
-It is sometimes useful to update the running code and / or configuration of a
-network service, without disrupting existing connections. Usually, this is
-achieved by starting a new process, somehow transferring clients to it and
-then exiting the old process.
+It is inspired heavily by cloudflare's
+[tableflip](https://github.com/cloudflare/tableflip) library.
+The primary difference between 'tableflip' and 'tableroll' is that 'tableroll'
+does not require updates to re-use the existing executable binary nor does it
+enforce any process heirarchy between the old and new processes.
 
-There are [many ways to implement graceful upgrades](https://blog.cloudflare.com/graceful-upgrades-in-go/).
-They vary wildly in the trade-offs they make, and how much control they afford the user. This library
-has the following goals:
+It is expected that the old and new procsses in a tableroll upgrade will both
+be managed by an external service manager, such as a systemd template unit.
 
-* No old code keeps running after a successful upgrade
-* The new process has a grace period for performing initialisation
-* Crashing during initialisation is OK
-* Only a single upgrade is ever run in parallel
-
-It's easy to get started:
-
-```Go
-upg, err := tableflip.New(tableflip.Options{})
-if err != nil {
-	panic(err)
-}
-defer upg.Stop()
-
-go func() {
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGHUP)
-	for range sig {
-		err := upg.Upgrade()
-		if err != nil {
-			log.Println("Upgrade failed:", err)
-			continue
-		}
-
-		log.Println("Upgrade succeeded")
-	}
-}()
-
-ln, err := upg.Fds.Listen("tcp", "localhost:8080")
-if err != nil {
-	log.Fatalln("Can't listen:", err)
-}
-
-var server http.Server
-go server.Serve(ln)
-
-if err := upg.Ready(); err != nil {
-	panic(err)
-}
-<-upg.Exit()
-
-time.AfterFunc(30*time.Second, func() {
-	os.Exit(1)
-})
-
-_ = server.Shutdown(context.Background())
-```
+Instead of coordinating upgrades between a parent and child process, tableroll
+coordinates upgrades between a number of processes that agree on a well-known
+filesystem path ahead of time, and which all have access to that path.
