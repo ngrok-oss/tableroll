@@ -1,4 +1,4 @@
-package shakiin
+package tableroll
 
 import (
 	"fmt"
@@ -108,7 +108,7 @@ func (c *coordinator) ConnectParent() (*net.UnixConn, error) {
 		// Assume this is ECONNREFUSED even though we can't reliably detect it.
 		// ECONNREFUSED here means that the pidfile had X in it, process X's pid is
 		// alive (possibly due to reuse), and X is not listening on its socket.
-		// That means X is a misbehaving shakiin process since it should *never*
+		// That means X is a misbehaving tableroll process since it should *never*
 		// have let us grabbed the pid lock unless it was also already listening on
 		// its sock.  Our best bet is thus to assume nothing about that process and
 		// try to take over.

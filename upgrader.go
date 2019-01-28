@@ -1,4 +1,4 @@
-package shakiin
+package tableroll
 
 import (
 	"net"
@@ -66,7 +66,7 @@ func New(coordinationDir string, opts ...Option) (upg *Upgrader, err error) {
 	stdEnvMu.Lock()
 	defer stdEnvMu.Unlock()
 	if stdEnvUpgrader != nil {
-		return nil, errors.New("shakiin: only a single Upgrader allowed")
+		return nil, errors.New("tableroll: only a single Upgrader allowed")
 	}
 
 	upg, err = newUpgrader(coordinationDir, opts...)

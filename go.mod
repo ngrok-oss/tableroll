@@ -1,4 +1,4 @@
-module github.com/ngrok/shakiin
+module github.com/ngrok/tableroll
 
 require (
 	github.com/ftrvxmtrx/fd v0.0.0-20150925145434-c6d800382fff

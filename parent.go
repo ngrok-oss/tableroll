@@ -1,4 +1,4 @@
-package shakiin
+package tableroll
 
 import (
 	"encoding/binary"
