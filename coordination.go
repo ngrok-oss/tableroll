@@ -13,6 +13,11 @@ import (
 	"github.com/rkt/rkt/pkg/lock"
 )
 
+// ErrNoParent indicates that either no process currently is marked as
+// controlling the upgradeable file descriptors (e.g. initial startup case), or
+// a process is supposed to own them but is dead (e.g. it crashed).
+var ErrNoParent = errors.New("no parent process exists")
+
 // coordination is used to coordinate between N processes, one of which is the
 // current parent.
 // It must provide means of getting the parent, updating the parent, and
@@ -84,8 +89,6 @@ func (c *coordinator) GetParentPID() (int, error) {
 	return pid, nil
 }
 
-var ErrNoParent = errors.New("no parent process exists")
-
 func (c *coordinator) ConnectParent() (*net.UnixConn, error) {
 	ppid, err := c.GetParentPID()
 	if err != nil {
@@ -102,7 +105,15 @@ func (c *coordinator) ConnectParent() (*net.UnixConn, error) {
 	sockPath := upgradeSockPath(c.dir, ppid)
 	conn, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: sockPath, Net: "unix"})
 	if err != nil {
-		return nil, errors.Wrap(err, "error connecting to parent")
+		// Assume this is ECONNREFUSED even though we can't reliably detect it.
+		// ECONNREFUSED here means that the pidfile had X in it, process X's pid is
+		// alive (possibly due to reuse), and X is not listening on its socket.
+		// That means X is a misbehaving shakiin process since it should *never*
+		// have let us grabbed the pid lock unless it was also already listening on
+		// its sock.  Our best bet is thus to assume nothing about that process and
+		// try to take over.
+		c.l.Warn("found living pid in coordination dir, but it wasn't listneing for us", "pid", ppid, "dialErr", err)
+		return nil, ErrNoParent
 	}
 	return conn, nil
 }
