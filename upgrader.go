@@ -14,11 +14,6 @@ import (
 // readiness notification was received.
 const DefaultUpgradeTimeout time.Duration = time.Minute
 
-var (
-	stdEnvMu       sync.Mutex
-	stdEnvUpgrader *Upgrader
-)
-
 // Upgrader handles zero downtime upgrades and passing files between processes.
 type Upgrader struct {
 	upgradeTimeout time.Duration
@@ -71,20 +66,6 @@ func WithLogger(l log15.Logger) Option {
 // Canonically, this directory is `/run/${program}/tableroll/`.
 // Any number of options to configure tableroll may also be provided.
 func New(coordinationDir string, opts ...Option) (upg *Upgrader, err error) {
-	stdEnvMu.Lock()
-	defer stdEnvMu.Unlock()
-	if stdEnvUpgrader != nil {
-		return nil, errors.New("tableroll: only a single Upgrader allowed")
-	}
-
-	upg, err = newUpgrader(coordinationDir, opts...)
-	// Store a reference to upg in a private global variable, to prevent
-	// it from being GC'ed and exitFd being closed prematurely.
-	stdEnvUpgrader = upg
-	return
-}
-
-func newUpgrader(coordinationDir string, opts ...Option) (*Upgrader, error) {
 	upgradeListener, err := listenSock(coordinationDir)
 	if err != nil {
 		return nil, errors.Wrapf(err, "error listening on upgrade socket")
