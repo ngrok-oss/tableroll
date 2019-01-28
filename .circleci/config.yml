@@ -1,0 +1,13 @@
+version: 2
+jobs:
+  build:
+    docker:
+    - image: circleci/golang:1.11
+    working_directory: /home/circleci/tableroll
+    steps:
+    - checkout
+    - run:
+        name: Run unit tests
+        command: |
+          go mod vendor
+          go test ./...
