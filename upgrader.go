@@ -43,6 +43,9 @@ type Upgrader struct {
 	Fds *Fds
 }
 
+// Option is an option function for Upgrader.
+// See Rob Pike's post on the topic for more information on this pattern:
+// https://commandcenter.blogspot.com/2014/01/self-referential-functions-and-design.html
 type Option func(u *Upgrader)
 
 // WithUpgradeTimeout allows configuring the update timeout. If a time of 0 is
@@ -56,12 +59,20 @@ func WithUpgradeTimeout(t time.Duration) Option {
 	}
 }
 
+// WithLogger configures the logger to use for tableroll operations.
+// By default, nothing will be logged.
 func WithLogger(l log15.Logger) Option {
 	return func(u *Upgrader) {
 		u.l = l
 	}
 }
 
+// New constructs a tableroll upgrader.
+// The first argument is a directory. All processes in an upgrade chain must
+// use the same coordination directory. The provided directory must exist and
+// be writeable by the process using tableroll.
+// Canonically, this directory is `/run/${program}/tableroll/`.
+// Any number of options to configure tableroll may also be provided.
 func New(coordinationDir string, opts ...Option) (upg *Upgrader, err error) {
 	stdEnvMu.Lock()
 	defer stdEnvMu.Unlock()
@@ -107,9 +118,8 @@ func newUpgrader(coordinationDir string, opts ...Option) (*Upgrader, error) {
 
 	go func() {
 		for {
-			err := s.AwaitUpgrade()
+			err := s.awaitUpgrade()
 			if err != nil {
-				// TODO
 				s.l.Error("error awaiting upgrade", "err", err)
 			}
 		}
@@ -126,7 +136,7 @@ func listenSock(coordinationDir string) (*net.UnixListener, error) {
 	})
 }
 
-func (u *Upgrader) AwaitUpgrade() error {
+func (u *Upgrader) awaitUpgrade() error {
 	for {
 		netConn, err := u.upgradeSock.Accept()
 		if err != nil {

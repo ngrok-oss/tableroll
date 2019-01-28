@@ -32,7 +32,7 @@ func pidIsDead(pid int) bool {
 }
 
 func newParent(l log15.Logger, coordinationDir string) (*coordinator, *parent, map[fileName]*file, error) {
-	coord, err := LockCoordinationDir(l, coordinationDir)
+	coord, err := lockCoordinationDir(l, coordinationDir)
 	if err != nil {
 		return nil, nil, nil, err
 	}
