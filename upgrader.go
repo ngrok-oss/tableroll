@@ -32,9 +32,6 @@ type Upgrader struct {
 	upgradeSem chan struct{}
 	exitC      chan struct{}      // only close this if holding upgradeSem
 	exitFd     neverCloseThisFile // protected by upgradeSem
-	parentErr  error              // protected by upgradeSem
-
-	unixSocket string
 
 	upgradeSock *net.UnixListener
 
