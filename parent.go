@@ -1,7 +1,8 @@
 package shakiin
 
 import (
-	"encoding/gob"
+	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -36,6 +37,7 @@ func newParent(l log15.Logger, coordinationDir string) (*coordinator, *parent, m
 		return nil, nil, nil, err
 	}
 
+	// sock is used for all messages between two siblings
 	sock, err := coord.ConnectParent()
 	if err == ErrNoParent {
 		return coord, nil, make(map[fileName]*file), nil
@@ -44,14 +46,26 @@ func newParent(l log15.Logger, coordinationDir string) (*coordinator, *parent, m
 		return coord, nil, nil, err
 	}
 
-	l.Info("connected to parents, getting fds")
+	l.Info("connected to parent, getting fds")
 	// First get the names of files to expect. This also lets us know how many FDs to get
 	var names [][]string
-	dec := gob.NewDecoder(sock)
-	if err := dec.Decode(&names); err != nil {
-		return coord, nil, nil, errors.Wrap(err, "can't decode names from parent process")
+
+	// Note: use length-prefixing and avoid decoding directly from the socket to
+	// ensure the reader isn't put into buffered mode, at which point file
+	// descriptors can get lost since go's io buffering is obviously not fd
+	// aware.
+	var jsonNameLength int32
+	if err := binary.Read(sock, binary.BigEndian, &jsonNameLength); err != nil {
+		panic("TODO binary read: " + err.Error())
+	}
+	nameJSON := make([]byte, jsonNameLength)
+	if n, err := io.ReadFull(sock, nameJSON); err != nil || n != int(jsonNameLength) {
+		return coord, nil, nil, fmt.Errorf("unable to read expected name json length (expected %v, got (%v, %v))", jsonNameLength, n, err)
 	}
 
+	if err := json.Unmarshal(nameJSON, &names); err != nil {
+		return coord, nil, nil, errors.Wrap(err, "can't decode names from parent process")
+	}
 	l.Debug("expecting files", "names", names)
 
 	// Now grab all the FDs from the parent from the socket

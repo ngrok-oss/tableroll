@@ -1,7 +1,10 @@
 package shakiin
 
 import (
-	"encoding/gob"
+	"bytes"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 
@@ -62,21 +65,39 @@ func (c *sibling) waitReady(readyC chan<- *os.File) {
 
 func (c *sibling) writeFiles(names [][]string, fds []*os.File) {
 	c.l.Info("passing along fds to our sibling", "numfds", len(fds))
-	enc := gob.NewEncoder(c.conn)
+	var jsonBlob bytes.Buffer
+	enc := json.NewEncoder(&jsonBlob)
 	if names == nil {
 		// Gob panics on nil
-		_ = enc.Encode([][]string{})
-		return
+		names = [][]string{}
 	}
-	_ = enc.Encode(names)
+	if err := enc.Encode(names); err != nil {
+		panic(err)
+	}
 
-	err := fdsock.Put(c.conn, fds...)
-	if err != nil {
+	var jsonBlobLenBuf bytes.Buffer
+	if err := binary.Write(&jsonBlobLenBuf, binary.BigEndian, int32(jsonBlob.Len())); err != nil {
+		panic(fmt.Errorf("could not binary encode an int32: %v", err))
+	}
+	if jsonBlobLenBuf.Len() != 4 {
+		panic(fmt.Errorf("int32 should be 4 bytes, not: %+v", jsonBlobLenBuf))
+	}
+
+	// Length-prefixed json blob
+	if _, err := c.conn.Write(jsonBlobLenBuf.Bytes()); err != nil {
+		panic("TODO(euank): real error handling: " + err.Error())
+	}
+	if _, err := c.conn.Write(jsonBlob.Bytes()); err != nil {
+		panic("TODO(euank): real error handling 2: " + err.Error())
+	}
+
+	// Write all files it's expecting
+	if err := fdsock.Put(c.conn, fds...); err != nil {
 		// TODO: this should *not* be a panic for sure
 		panic(err)
 	}
 
-	// Finally, read ready
+	// Finally, read ready byte and the handoff is done!
 	var b [1]byte
 	if n, _ := c.conn.Read(b[:]); n > 0 && b[0] == notifyReady {
 		c.l.Debug("our sibling sent us a ready")
