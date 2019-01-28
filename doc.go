@@ -1,17 +1,16 @@
-// Package shakiin implements zero downtime upgrades between unrelated processes.
+// Package shakiin implements zero downtime upgrades between two independently
+// managed processes.
 //
 // An upgrade is coordinated over a well-known coordination directory. Any
 // number of processes may be run at once that coordinate upgrades on that
-// directory, and between those many processes, one will be chosen to own all
+// directory, and between those many processes, one is chosen to own all
 // shareable / upgradeable file descriptors.
-// Each upgrade will uniquely involve two processes, and unix exclusive locks
-// on the filesystme will coordinate that.
+// Each upgrade uniquely involves two processes, and unix exclusive locks on
+// the filesystme coordinate that.
 //
 // Each process under shakiin should be able to signal readiness, which will
-// indicate to shakiin that it is safe for previous processes to begin draining.
-//
-// Optionally, a process under shakiin may also indicate that it should exit in
-// a given time after it begins draining.
+// indicate to shakiin that it is safe for previous processes to cease
+// listening for new connections and begin draining existing ones.
 //
 // Unlike other upgrade mechanisms in this space, it is expected that a new
 // binary is started independently, such as in a new container, not as a child
