@@ -63,8 +63,9 @@ func (c *coordinator) pidFile() string {
 }
 
 func (c *coordinator) BecomeParent() error {
-	c.l.Info("writing pid to become parent")
-	return ioutil.WriteFile(c.pidFile(), []byte(strconv.Itoa(c.os.Getpid())), 0755)
+	pid := c.os.Getpid()
+	c.l.Info("writing pid to become parent", "pid", pid)
+	return ioutil.WriteFile(c.pidFile(), []byte(strconv.Itoa(pid)), 0755)
 }
 
 func (c *coordinator) Unlock() error {
@@ -98,7 +99,7 @@ func (c *coordinator) ConnectParent() (*net.UnixConn, error) {
 		return nil, err
 	}
 	c.l.Info("connecting to parent", "parent", ppid)
-	if ppid == 0 || pidIsDead(ppid) {
+	if ppid == 0 || pidIsDead(c.os, ppid) {
 		// TODO(euank): technically there's a pid re-use race here.
 		// TODO: handle it with an econn-refused case probably?
 		c.l.Info("parent does not exist or is dead", "parent", ppid)
@@ -115,7 +116,7 @@ func (c *coordinator) ConnectParent() (*net.UnixConn, error) {
 		// have let us grabbed the pid lock unless it was also already listening on
 		// its sock.  Our best bet is thus to assume nothing about that process and
 		// try to take over.
-		c.l.Warn("found living pid in coordination dir, but it wasn't listneing for us", "pid", ppid, "dialErr", err)
+		c.l.Warn("found living pid in coordination dir, but it wasn't listening for us", "pid", ppid, "dialErr", err)
 		return nil, ErrNoParent
 	}
 	return conn, nil

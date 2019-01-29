@@ -3,6 +3,7 @@ package tableroll
 import (
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -88,7 +89,7 @@ func newUpgrader(os osIface, coordinationDir string, opts ...Option) (upg *Upgra
 		upgradeSock:    upgradeListener,
 		exitC:          make(chan struct{}),
 		l:              noopLogger,
-		os:             realOS{},
+		os:             os,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -106,6 +107,10 @@ func newUpgrader(os osIface, coordinationDir string, opts ...Option) (upg *Upgra
 		for {
 			err := s.awaitUpgrade()
 			if err != nil {
+				if err == errClosed {
+					s.l.Info("upgrade socket closed, no longer listening for upgrades")
+					return
+				}
 				s.l.Error("error awaiting upgrade", "err", err)
 			}
 		}
@@ -114,21 +119,25 @@ func newUpgrader(os osIface, coordinationDir string, opts ...Option) (upg *Upgra
 	return s, nil
 }
 
-func listenSock(os osIface, coordinationDir string) (*net.UnixListener, error) {
-	listenpath := upgradeSockPath(coordinationDir, os.Getpid())
+func listenSock(osi osIface, coordinationDir string) (*net.UnixListener, error) {
+	listenpath := upgradeSockPath(coordinationDir, osi.Getpid())
 	return net.ListenUnix("unix", &net.UnixAddr{
 		Name: listenpath,
 		Net:  "unix",
 	})
 }
 
+var errClosed = errors.New("connection closed")
+
 func (u *Upgrader) awaitUpgrade() error {
 	for {
-		netConn, err := u.upgradeSock.Accept()
+		conn, err := u.upgradeSock.AcceptUnix()
 		if err != nil {
+			if strings.Contains(err.Error(), "use of closed network connection") {
+				return errClosed
+			}
 			return errors.Wrap(err, "error accepting upgrade socket request")
 		}
-		conn := netConn.(*net.UnixConn)
 
 		// We got a request, only handle one request at a time via semaphore..
 		// Acquire semaphore, but don't block. This allows informing
@@ -226,6 +235,7 @@ func (u *Upgrader) Stop() {
 		// Interrupt any running Upgrade(), and
 		// prevent new upgrade from happening.
 		close(u.stopC)
+		u.upgradeSock.Close()
 
 		// Make sure exitC is closed if no upgrade was running.
 		u.upgradeSem <- struct{}{}
