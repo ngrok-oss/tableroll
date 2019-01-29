@@ -38,9 +38,10 @@ func touchFile(path string) error {
 	return err
 }
 
-// LockCoordinationDir takes an exclusive lock on the given coordination
+// lockCoordinationDir takes an exclusive lock on the given coordination
 // directory. It returns a coordinator that holds the lock and may be used to
-// manipulate the directory. If the directory is already locked, the function will block until the lock can be acquired.
+// manipulate the directory. If the directory is already locked, the function
+// will block until the lock can be acquired.
 func lockCoordinationDir(os osIface, l log15.Logger, dir string) (*coordinator, error) {
 	l = l.New("dir", dir)
 	coord := &coordinator{dir: dir, l: l, os: os}

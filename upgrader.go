@@ -69,11 +69,11 @@ func WithLogger(l log15.Logger) Option {
 // be writeable by the process using tableroll.
 // Canonically, this directory is `/run/${program}/tableroll/`.
 // Any number of options to configure tableroll may also be provided.
-func New(coordinationDir string, opts ...Option) (upg *Upgrader, err error) {
+func New(coordinationDir string, opts ...Option) (*Upgrader, error) {
 	return newUpgrader(realOS{}, coordinationDir, opts...)
 }
 
-func newUpgrader(os osIface, coordinationDir string, opts ...Option) (upg *Upgrader, err error) {
+func newUpgrader(os osIface, coordinationDir string, opts ...Option) (*Upgrader, error) {
 	upgradeListener, err := listenSock(os, coordinationDir)
 	if err != nil {
 		return nil, errors.Wrapf(err, "error listening on upgrade socket")
