@@ -1,12 +1,14 @@
 package tableroll
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"strings"
 	"sync"
 	"syscall"
 
+	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
 )
 
@@ -42,6 +44,10 @@ type file struct {
 	fd uintptr
 }
 
+func (f *file) String() string {
+	return fmt.Sprintf("File(name=%q,fd=%v)", f.Name(), f.fd)
+}
+
 func newFile(fd uintptr, name fileName) *file {
 	f := os.NewFile(fd, name.String())
 	if f == nil {
@@ -61,19 +67,37 @@ type Fds struct {
 	// NB: Files in these maps may be in blocking mode.
 	inherited map[fileName]*file
 	used      map[fileName]*file
+
+	l log15.Logger
 }
 
-func newFds(inherited map[fileName]*file) *Fds {
+func (f *Fds) String() string {
+	inherited := map[string]uintptr{}
+	used := map[string]uintptr{}
+	for name, fi := range f.inherited {
+		inherited[name.String()] = fi.fd
+	}
+	for name, fi := range f.used {
+		used[name.String()] = fi.fd
+	}
+
+	return fmt.Sprintf("inherited fds: %v, used fds: %v", inherited, used)
+}
+
+func newFds(l log15.Logger, inherited map[fileName]*file) *Fds {
 	if inherited == nil {
 		inherited = make(map[fileName]*file)
 	}
 	return &Fds{
 		inherited: inherited,
 		used:      make(map[fileName]*file),
+		l:         l,
 	}
 }
 
-// Listen returns a listener inherited from the parent process, or creates a new one.
+// Listen returns a listener inherited from the parent process, or creates a
+// new one. It is expected that the caller will close the returned listener
+// once the Upgrader indicates draining is desired.
 func (f *Fds) Listen(network, addr string) (net.Listener, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -108,7 +132,8 @@ func (f *Fds) Listen(network, addr string) (net.Listener, error) {
 
 // Listener returns an inherited listener or nil.
 //
-// It is safe to close the returned listener.
+// It is the caller's responsibility to close the returned listener once
+// connections should be drained.
 func (f *Fds) Listener(network, addr string) (net.Listener, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -135,8 +160,9 @@ func (f *Fds) listenerLocked(network, addr string) (net.Listener, error) {
 
 // AddListener adds a listener.
 //
-// It is safe to close ln after calling the method.
-// Any existing listener with the same address is overwitten.
+// It remains the caller's responsibility to close the passed listener; only a
+// duplicated file descriptor is stored in Fds.
+// Any existing added listener with the same address is overwitten.
 func (f *Fds) AddListener(network, addr string, ln Listener) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -158,7 +184,9 @@ func (f *Fds) addListenerLocked(network, addr string, ln Listener) error {
 
 // Conn returns an inherited connection or nil.
 //
-// It is safe to close the returned Conn.
+// It is the caller's responsibility to close the returned Conn at the
+// appropriate time, typically when the Upgrader indicates draining and exiting
+// is expected.
 func (f *Fds) Conn(network, addr string) (net.Conn, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -181,7 +209,9 @@ func (f *Fds) Conn(network, addr string) (net.Conn, error) {
 
 // AddConn adds a connection.
 //
-// It is safe to close conn after calling this method.
+// It is the caller's responsibility to close the returned Conn at the
+// appropriate time, typically when the Upgrader indicates draining and exiting
+// is expected.
 func (f *Fds) AddConn(network, addr string, conn Conn) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -268,7 +298,9 @@ func (f *Fds) closeInherited() {
 			// This undoes the effect of SetUnlinkOnClose(false).
 			_ = unlinkUnixSocket(key[2])
 		}
-		_ = file.Close()
+		if err := file.Close(); err != nil {
+			f.l.Warn("error closing inherited file %v: %v", file, err)
+		}
 	}
 	f.inherited = make(map[fileName]*file)
 }
@@ -291,7 +323,9 @@ func (f *Fds) closeUsed() {
 	defer f.mu.Unlock()
 
 	for _, file := range f.used {
-		_ = file.Close()
+		if err := file.Close(); err != nil {
+			f.l.Warn("error closing used file %v: %v", file, err)
+		}
 	}
 	f.used = make(map[fileName]*file)
 }

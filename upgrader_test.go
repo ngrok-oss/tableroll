@@ -24,8 +24,8 @@ func TestUpgradeHandoff(t *testing.T) {
 
 	// Server 1 starts listening
 	upg1, s1 := createTestServer(t, 1, coordDir, server1Reqs, server1Msgs)
-	// defer upg1.Stop() // TODO, this hangs :(
 	defer s1.Close()
+	defer upg1.Stop()
 	c1 := s1.Client()
 
 	go func() {
@@ -45,11 +45,9 @@ func TestUpgradeHandoff(t *testing.T) {
 
 	// now have s2 take over for s1
 	upg2, s2 := createTestServer(t, 2, coordDir, server2Reqs, server2Msgs)
-	// defer upg2.Stop()
-	_ = upg2
+	defer upg2.Stop()
 	<-upg1.Exit()
-	upg1.Stop()
-	s1.Listener.Close() // Should this happen here, or should upg.Fds take care of this on upgrade ready automatically?
+	s1.Listener.Close()
 	defer s2.Close()
 	go func() {
 		<-server2Reqs
@@ -79,7 +77,7 @@ func assertResp(t *testing.T, url string, c *http.Client, expected string) {
 
 func createTestServer(t *testing.T, pid int, coordDir string, requests chan<- struct{}, responses <-chan string) (*Upgrader, *httptest.Server) {
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		t.Logf("server %d got a request", pid)
+		l.Info("server got a request", "pid", pid)
 		// Let the test harness know a client is waiting on us
 		requests <- struct{}{}
 		// And now respond, as requested by the test harness
@@ -92,11 +90,11 @@ func createTestServer(t *testing.T, pid int, coordDir string, requests chan<- st
 		t.Fatalf("error creating upgrader: %v", err)
 	}
 
-	l, err := upg.Fds.Listen("tcp", "127.0.0.1:0")
+	listen, err := upg.Fds.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("unable to listen: %v", err)
 	}
-	server.Listener = l
+	server.Listener = listen
 	server.Start()
 	if err := upg.Ready(); err != nil {
 		t.Fatalf("unable to mark self as ready: %v", err)
