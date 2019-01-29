@@ -175,24 +175,12 @@ func (u *Upgrader) awaitUpgrade() error {
 
 		readyTimeout := time.After(u.upgradeTimeout)
 		select {
-		case err := <-nextParent.exitedC:
-			if err == nil {
-				return errors.Errorf("next parent %s exited", nextParent)
-			}
-			return errors.Wrapf(err, "next parent %s exited", nextParent)
-
 		case <-u.stopC:
 			return errors.New("terminating")
-
 		case <-readyTimeout:
 			return errors.Errorf("new parent %s timed out", nextParent)
+		case <-nextParent.readyC:
 
-		case file := <-nextParent.readyC:
-			// Save file in exitFd, so that it's only closed when the process
-			// exits. This signals to the new process that the old process
-			// has exited.
-			// TODO: is this a thing?
-			u.exitFd = neverCloseThisFile{file}
 			close(u.exitC)
 			return nil
 		}

@@ -14,9 +14,8 @@ import (
 
 type sibling struct {
 	readyR, namesW *os.File
-	readyC         chan *os.File
+	readyC         chan struct{}
 	exitedC        <-chan error
-	doneC          <-chan struct{}
 	conn           *net.UnixConn
 	l              log15.Logger
 }
@@ -35,32 +34,24 @@ func startSibling(l log15.Logger, conn *net.UnixConn, passedFiles map[fileName]*
 		fds = append(fds, file.File)
 	}
 
-	doneC := make(chan struct{})
-	exitedC := make(chan error, 1)
-	readyC := make(chan *os.File, 1)
-
 	c := &sibling{
 		conn:    conn,
-		readyC:  readyC,
-		exitedC: exitedC,
-		doneC:   doneC,
+		exitedC: make(chan error, 1),
+		readyC:  make(chan struct{}),
 		l:       l,
 	}
 	go c.writeFiles(fdNames, fds)
 	return c, nil
 }
 
-func (c *sibling) waitReady(readyC chan<- *os.File) {
+func (c *sibling) waitReady() {
 	var b [1]byte
 	if n, _ := c.conn.Read(b[:]); n > 0 && b[0] == notifyReady {
 		c.l.Debug("our sibling sent us a ready")
-		// We know that writeFiles has finished now.
-		// TODO: signal the sibling that we're exiting
-		readyC <- c.namesW
 	} else {
-		c.l.Debug("our sibling failed to send us a ready")
+		c.l.Error("our sibling failed to send us a ready")
+		// TODO: this means we should not close our FDs, our sibling might not have taken over.
 	}
-	c.readyR.Close()
 }
 
 func (c *sibling) writeFiles(names [][]string, fds []*os.File) {
@@ -101,9 +92,7 @@ func (c *sibling) writeFiles(names [][]string, fds []*os.File) {
 	var b [1]byte
 	if n, _ := c.conn.Read(b[:]); n > 0 && b[0] == notifyReady {
 		c.l.Debug("our sibling sent us a ready")
-		// We know that writeFiles has finished now.
-		// TODO: signal the sibling that we're exiting
-		c.readyC <- c.namesW
+		c.readyC <- struct{}{}
 	} else {
 		c.l.Debug("our sibling failed to send us a ready")
 	}
