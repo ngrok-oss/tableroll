@@ -100,8 +100,6 @@ func (c *coordinator) ConnectParent() (*net.UnixConn, error) {
 	}
 	c.l.Info("connecting to parent", "parent", ppid)
 	if ppid == 0 || pidIsDead(c.os, ppid) {
-		// TODO(euank): technically there's a pid re-use race here.
-		// TODO: handle it with an econn-refused case probably?
 		c.l.Info("parent does not exist or is dead", "parent", ppid)
 		return nil, ErrNoParent
 	}
