@@ -10,8 +10,10 @@ import (
 	"github.com/pkg/errors"
 )
 
-// DefaultUpgradeTimeout is the duration before the Upgrader kills the new process if no
-// readiness notification was received.
+// DefaultUpgradeTimeout is the duration in which the upgrader expects the
+// sibling to send a 'Ready' notification after passing over all its file
+// descriptors; If the sibling does not send that it is ready in that duration,
+// this Upgrader will close the sibling's connection and wait for additional connections.
 const DefaultUpgradeTimeout time.Duration = time.Minute
 
 // Upgrader handles zero downtime upgrades and passing files between processes.

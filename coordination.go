@@ -13,10 +13,10 @@ import (
 	"github.com/rkt/rkt/pkg/lock"
 )
 
-// ErrNoParent indicates that either no process currently is marked as
+// errNoParent indicates that either no process currently is marked as
 // controlling the upgradeable file descriptors (e.g. initial startup case), or
 // a process is supposed to own them but is dead (e.g. it crashed).
-var ErrNoParent = errors.New("no parent process exists")
+var errNoParent = errors.New("no parent process exists")
 
 // coordination is used to coordinate between N processes, one of which is the
 // current parent.
@@ -102,7 +102,7 @@ func (c *coordinator) ConnectParent() (*net.UnixConn, error) {
 	c.l.Info("connecting to parent", "parent", ppid)
 	if ppid == 0 || pidIsDead(c.os, ppid) {
 		c.l.Info("parent does not exist or is dead", "parent", ppid)
-		return nil, ErrNoParent
+		return nil, errNoParent
 	}
 
 	sockPath := upgradeSockPath(c.dir, ppid)
@@ -116,7 +116,7 @@ func (c *coordinator) ConnectParent() (*net.UnixConn, error) {
 		// its sock.  Our best bet is thus to assume nothing about that process and
 		// try to take over.
 		c.l.Warn("found living pid in coordination dir, but it wasn't listening for us", "pid", ppid, "dialErr", err)
-		return nil, ErrNoParent
+		return nil, errNoParent
 	}
 	return conn, nil
 }

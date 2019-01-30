@@ -37,7 +37,7 @@ func newParent(l log15.Logger, osi osIface, coordinationDir string) (*coordinato
 
 	// sock is used for all messages between two siblings
 	sock, err := coord.ConnectParent()
-	if err == ErrNoParent {
+	if err == errNoParent {
 		return coord, nil, make(map[fileName]*file), nil
 	}
 	if err != nil {
