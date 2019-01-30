@@ -6,7 +6,7 @@
 // directory, and between those many processes, one is chosen to own all
 // shareable / upgradeable file descriptors.
 // Each upgrade uniquely involves two processes, and unix exclusive locks on
-// the filesystme coordinate that.
+// the filesystem ensure that.
 //
 // Each process under tableroll should be able to signal readiness, which will
 // indicate to tableroll that it is safe for previous processes to cease
@@ -16,5 +16,6 @@
 // binary is started independently, such as in a new container, not as a child
 // of the existing one. How a new upgrade is started is entirely out of scope
 // of this library. Both copies of the process must have access to the same
-// coordination directory, but other than that, it's fine.
+// coordination directory, but apart from that, there are no stringent
+// requirements.
 package tableroll
