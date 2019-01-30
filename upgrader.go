@@ -1,6 +1,7 @@
 package tableroll
 
 import (
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -163,18 +164,17 @@ func (u *Upgrader) awaitUpgrade() error {
 		select {
 		case <-u.readyC:
 		default:
-			return errors.New("this process cannot service an ugprade request until it is ready; not yet marked ready")
+			return errors.New("this process cannot service an upgrade request until it is ready; not yet marked ready")
 		}
 
 		u.l.Info("passing along the torch")
 		// time to pass our FDs along
-		nextParent, err := startSibling(u.l, conn, u.Fds.copy())
-		if err != nil {
-			return errors.Wrap(err, "can't start next parent")
-		}
+		nextParent, errC := startSibling(u.l, conn, u.Fds.copy())
 
 		readyTimeout := time.After(u.upgradeTimeout)
 		select {
+		case err := <-errC:
+			return fmt.Errorf("next parent gave us an error: %v", err)
 		case <-u.stopC:
 			return errors.New("terminating")
 		case <-readyTimeout:

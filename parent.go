@@ -54,7 +54,7 @@ func newParent(l log15.Logger, osi osIface, coordinationDir string) (*coordinato
 	// aware.
 	var jsonNameLength int32
 	if err := binary.Read(sock, binary.BigEndian, &jsonNameLength); err != nil {
-		panic("TODO binary read: " + err.Error())
+		return coord, nil, nil, fmt.Errorf("protocol error: could not read length of json: %v", err)
 	}
 	nameJSON := make([]byte, jsonNameLength)
 	if n, err := io.ReadFull(sock, nameJSON); err != nil || n != int(jsonNameLength) {
