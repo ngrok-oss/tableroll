@@ -136,6 +136,7 @@ func (u *Upgrader) awaitUpgrade() error {
 			}
 			return errors.Wrap(err, "error accepting upgrade socket request")
 		}
+		defer conn.Close()
 
 		// We got a request, only handle one request at a time via semaphore..
 		// Acquire semaphore, but don't block. This allows informing
@@ -160,8 +161,7 @@ func (u *Upgrader) awaitUpgrade() error {
 		select {
 		case <-u.readyC:
 		default:
-			// TODO: err
-			return errors.New("TODO")
+			return errors.New("this process cannot service an ugprade request until it is ready; not yet marked ready")
 		}
 
 		u.l.Info("passing along the torch")
