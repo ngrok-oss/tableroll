@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"os"
 	"syscall"
@@ -26,13 +25,13 @@ type parent struct {
 	l           log15.Logger
 }
 
-func pidIsDead(pid int) bool {
-	proc, _ := os.FindProcess(pid)
+func pidIsDead(osi osIface, pid int) bool {
+	proc, _ := osi.FindProcess(pid)
 	return proc.Signal(syscall.Signal(0)) != nil
 }
 
-func newParent(l log15.Logger, coordinationDir string) (*coordinator, *parent, map[fileName]*file, error) {
-	coord, err := LockCoordinationDir(l, coordinationDir)
+func newParent(l log15.Logger, osi osIface, coordinationDir string) (*coordinator, *parent, map[fileName]*file, error) {
+	coord, err := lockCoordinationDir(osi, l, coordinationDir)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -98,21 +97,8 @@ func newParent(l log15.Logger, coordinationDir string) (*coordinator, *parent, m
 
 	// now that we have the FDs from the old parent, we just need to tell it when we're ready and then we're done and happy!
 
-	exited := make(chan error, 1)
-	go func() {
-		// we should not get anything else on the sock other than a close
-		n, err := io.Copy(ioutil.Discard, sock)
-		if n != 0 {
-			exited <- errors.New("unexpected data from parent process")
-		} else if err != nil {
-			exited <- errors.Wrap(err, "unexpected error while waiting for previous parent to exit")
-		}
-		close(exited)
-	}()
-
 	return coord, &parent{
 		wr:          sock,
-		exited:      exited,
 		coordinator: coord,
 		l:           l,
 	}, files, nil
@@ -131,5 +117,6 @@ func (ps *parent) sendReady() error {
 	if err := ps.coordinator.Unlock(); err != nil {
 		return err
 	}
+	ps.l.Info("unlocked coordinator directory")
 	return nil
 }

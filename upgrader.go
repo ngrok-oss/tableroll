@@ -3,6 +3,7 @@ package tableroll
 import (
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,11 +14,6 @@ import (
 // DefaultUpgradeTimeout is the duration before the Upgrader kills the new process if no
 // readiness notification was received.
 const DefaultUpgradeTimeout time.Duration = time.Minute
-
-var (
-	stdEnvMu       sync.Mutex
-	stdEnvUpgrader *Upgrader
-)
 
 // Upgrader handles zero downtime upgrades and passing files between processes.
 type Upgrader struct {
@@ -32,17 +28,20 @@ type Upgrader struct {
 	upgradeSem chan struct{}
 	exitC      chan struct{}      // only close this if holding upgradeSem
 	exitFd     neverCloseThisFile // protected by upgradeSem
-	parentErr  error              // protected by upgradeSem
-
-	unixSocket string
 
 	upgradeSock *net.UnixListener
 
 	l log15.Logger
 
 	Fds *Fds
+
+	// mocks
+	os osIface
 }
 
+// Option is an option function for Upgrader.
+// See Rob Pike's post on the topic for more information on this pattern:
+// https://commandcenter.blogspot.com/2014/01/self-referential-functions-and-design.html
 type Option func(u *Upgrader)
 
 // WithUpgradeTimeout allows configuring the update timeout. If a time of 0 is
@@ -56,28 +55,26 @@ func WithUpgradeTimeout(t time.Duration) Option {
 	}
 }
 
+// WithLogger configures the logger to use for tableroll operations.
+// By default, nothing will be logged.
 func WithLogger(l log15.Logger) Option {
 	return func(u *Upgrader) {
 		u.l = l
 	}
 }
 
-func New(coordinationDir string, opts ...Option) (upg *Upgrader, err error) {
-	stdEnvMu.Lock()
-	defer stdEnvMu.Unlock()
-	if stdEnvUpgrader != nil {
-		return nil, errors.New("tableroll: only a single Upgrader allowed")
-	}
-
-	upg, err = newUpgrader(coordinationDir, opts...)
-	// Store a reference to upg in a private global variable, to prevent
-	// it from being GC'ed and exitFd being closed prematurely.
-	stdEnvUpgrader = upg
-	return
+// New constructs a tableroll upgrader.
+// The first argument is a directory. All processes in an upgrade chain must
+// use the same coordination directory. The provided directory must exist and
+// be writeable by the process using tableroll.
+// Canonically, this directory is `/run/${program}/tableroll/`.
+// Any number of options to configure tableroll may also be provided.
+func New(coordinationDir string, opts ...Option) (*Upgrader, error) {
+	return newUpgrader(realOS{}, coordinationDir, opts...)
 }
 
-func newUpgrader(coordinationDir string, opts ...Option) (*Upgrader, error) {
-	upgradeListener, err := listenSock(coordinationDir)
+func newUpgrader(os osIface, coordinationDir string, opts ...Option) (*Upgrader, error) {
+	upgradeListener, err := listenSock(os, coordinationDir)
 	if err != nil {
 		return nil, errors.Wrapf(err, "error listening on upgrade socket")
 	}
@@ -92,12 +89,13 @@ func newUpgrader(coordinationDir string, opts ...Option) (*Upgrader, error) {
 		upgradeSock:    upgradeListener,
 		exitC:          make(chan struct{}),
 		l:              noopLogger,
+		os:             os,
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
 
-	coord, parent, files, err := newParent(s.l, coordinationDir)
+	coord, parent, files, err := newParent(s.l, s.os, coordinationDir)
 	if err != nil {
 		return nil, err
 	}
@@ -107,9 +105,12 @@ func newUpgrader(coordinationDir string, opts ...Option) (*Upgrader, error) {
 
 	go func() {
 		for {
-			err := s.AwaitUpgrade()
+			err := s.awaitUpgrade()
 			if err != nil {
-				// TODO
+				if err == errClosed {
+					s.l.Info("upgrade socket closed, no longer listening for upgrades")
+					return
+				}
 				s.l.Error("error awaiting upgrade", "err", err)
 			}
 		}
@@ -118,21 +119,25 @@ func newUpgrader(coordinationDir string, opts ...Option) (*Upgrader, error) {
 	return s, nil
 }
 
-func listenSock(coordinationDir string) (*net.UnixListener, error) {
-	listenpath := upgradeSockPath(coordinationDir, os.Getpid())
+func listenSock(osi osIface, coordinationDir string) (*net.UnixListener, error) {
+	listenpath := upgradeSockPath(coordinationDir, osi.Getpid())
 	return net.ListenUnix("unix", &net.UnixAddr{
 		Name: listenpath,
 		Net:  "unix",
 	})
 }
 
-func (u *Upgrader) AwaitUpgrade() error {
+var errClosed = errors.New("connection closed")
+
+func (u *Upgrader) awaitUpgrade() error {
 	for {
-		netConn, err := u.upgradeSock.Accept()
+		conn, err := u.upgradeSock.AcceptUnix()
 		if err != nil {
+			if strings.Contains(err.Error(), "use of closed network connection") {
+				return errClosed
+			}
 			return errors.Wrap(err, "error accepting upgrade socket request")
 		}
-		conn := netConn.(*net.UnixConn)
 
 		// We got a request, only handle one request at a time via semaphore..
 		// Acquire semaphore, but don't block. This allows informing
@@ -230,6 +235,7 @@ func (u *Upgrader) Stop() {
 		// Interrupt any running Upgrade(), and
 		// prevent new upgrade from happening.
 		close(u.stopC)
+		u.upgradeSock.Close()
 
 		// Make sure exitC is closed if no upgrade was running.
 		u.upgradeSem <- struct{}{}

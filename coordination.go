@@ -28,6 +28,9 @@ type coordinator struct {
 	lock *lock.FileLock
 	dir  string
 	l    log15.Logger
+
+	// mocks
+	os osIface
 }
 
 func touchFile(path string) error {
@@ -35,12 +38,13 @@ func touchFile(path string) error {
 	return err
 }
 
-// LockCoordinationDir takes an exclusive lock on the given coordination
+// lockCoordinationDir takes an exclusive lock on the given coordination
 // directory. It returns a coordinator that holds the lock and may be used to
-// manipulate the directory. If the directory is already locked, the function will block until the lock can be acquired.
-func LockCoordinationDir(l log15.Logger, dir string) (*coordinator, error) {
+// manipulate the directory. If the directory is already locked, the function
+// will block until the lock can be acquired.
+func lockCoordinationDir(os osIface, l log15.Logger, dir string) (*coordinator, error) {
 	l = l.New("dir", dir)
-	coord := &coordinator{dir: dir, l: l}
+	coord := &coordinator{dir: dir, l: l, os: os}
 	pidPath := coord.pidFile()
 	if err := touchFile(pidPath); err != nil {
 		return nil, err
@@ -60,8 +64,9 @@ func (c *coordinator) pidFile() string {
 }
 
 func (c *coordinator) BecomeParent() error {
-	c.l.Info("writing pid to become parent")
-	return ioutil.WriteFile(c.pidFile(), []byte(strconv.Itoa(os.Getpid())), 0755)
+	pid := c.os.Getpid()
+	c.l.Info("writing pid to become parent", "pid", pid)
+	return ioutil.WriteFile(c.pidFile(), []byte(strconv.Itoa(pid)), 0755)
 }
 
 func (c *coordinator) Unlock() error {
@@ -95,9 +100,7 @@ func (c *coordinator) ConnectParent() (*net.UnixConn, error) {
 		return nil, err
 	}
 	c.l.Info("connecting to parent", "parent", ppid)
-	if ppid == 0 || pidIsDead(ppid) {
-		// TODO(euank): technically there's a pid re-use race here.
-		// TODO: handle it with an econn-refused case probably?
+	if ppid == 0 || pidIsDead(c.os, ppid) {
 		c.l.Info("parent does not exist or is dead", "parent", ppid)
 		return nil, ErrNoParent
 	}
@@ -112,7 +115,7 @@ func (c *coordinator) ConnectParent() (*net.UnixConn, error) {
 		// have let us grabbed the pid lock unless it was also already listening on
 		// its sock.  Our best bet is thus to assume nothing about that process and
 		// try to take over.
-		c.l.Warn("found living pid in coordination dir, but it wasn't listneing for us", "pid", ppid, "dialErr", err)
+		c.l.Warn("found living pid in coordination dir, but it wasn't listening for us", "pid", ppid, "dialErr", err)
 		return nil, ErrNoParent
 	}
 	return conn, nil
