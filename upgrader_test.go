@@ -46,7 +46,7 @@ func TestUpgradeHandoff(t *testing.T) {
 	// now have s2 take over for s1
 	upg2, s2 := createTestServer(t, 2, coordDir, server2Reqs, server2Msgs)
 	defer upg2.Stop()
-	<-upg1.Exit()
+	<-upg1.UpgradeComplete()
 	s1.Listener.Close()
 	defer s2.Close()
 	go func() {

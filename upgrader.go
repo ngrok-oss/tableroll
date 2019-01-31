@@ -169,7 +169,7 @@ func (u *Upgrader) awaitUpgrade() error {
 
 		u.l.Info("passing along the torch")
 		// time to pass our FDs along
-		nextParent, errC := startSibling(u.l, conn, u.Fds.copy())
+		nextParent, errC := passFdsToSibling(u.l, conn, u.Fds.copy())
 
 		readyTimeout := time.After(u.upgradeTimeout)
 		select {
@@ -210,9 +210,10 @@ func (u *Upgrader) Ready() error {
 	return u.parent.sendReady()
 }
 
-// Exit returns a channel which is closed when the process should
-// exit.
-func (u *Upgrader) Exit() <-chan struct{} {
+// UpgradeComplete returns a channel which is closed when the managed file
+// descriptors have been passed to the next process, and the next process has
+// indicated it is ready.
+func (u *Upgrader) UpgradeComplete() <-chan struct{} {
 	return u.exitC
 }
 

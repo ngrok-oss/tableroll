@@ -22,9 +22,10 @@ func (c *sibling) String() string {
 	return c.conn.RemoteAddr().String()
 }
 
-// startSibling passes all this processes file descriptors to a sibling over the provided unix connection.
-// It returns an error channel which will, at most, have one error written to it.
-func startSibling(l log15.Logger, conn *net.UnixConn, passedFiles map[fileName]*file) (*sibling, <-chan error) {
+// passFdsToSibling passes all this processes file descriptors to a sibling
+// over the provided unix connection.  It returns an error channel which will,
+// at most, have one error written to it.
+func passFdsToSibling(l log15.Logger, conn *net.UnixConn, passedFiles map[fileName]*file) (*sibling, <-chan error) {
 	errChan := make(chan error, 1)
 	fds := make([]*os.File, 0, len(passedFiles))
 	fdNames := make([][]string, 0, len(passedFiles))
