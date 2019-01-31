@@ -22,6 +22,8 @@ func (c *sibling) String() string {
 	return c.conn.RemoteAddr().String()
 }
 
+// startSibling passes all this processes file descriptors to a sibling over the provided unix connection.
+// It returns an error channel which will, at most, have one error written to it.
 func startSibling(l log15.Logger, conn *net.UnixConn, passedFiles map[fileName]*file) (*sibling, <-chan error) {
 	errChan := make(chan error, 1)
 	fds := make([]*os.File, 0, len(passedFiles))
@@ -38,11 +40,18 @@ func startSibling(l log15.Logger, conn *net.UnixConn, passedFiles map[fileName]*
 		readyC: make(chan struct{}),
 		l:      l,
 	}
-	go c.writeFiles(fdNames, fds, errChan)
+	go func() {
+		defer close(errChan)
+		err := c.writeFiles(fdNames, fds)
+		if err != nil {
+			errChan <- err
+		}
+	}()
 	return c, errChan
 }
 
-func (c *sibling) writeFiles(names [][]string, fds []*os.File, errs chan<- error) {
+// writeFiles passes the list of files to the sibling.
+func (c *sibling) writeFiles(names [][]string, fds []*os.File) error {
 	c.l.Info("passing along fds to our sibling", "files", fds)
 	var jsonBlob bytes.Buffer
 	enc := json.NewEncoder(&jsonBlob)
@@ -63,18 +72,15 @@ func (c *sibling) writeFiles(names [][]string, fds []*os.File, errs chan<- error
 
 	// Length-prefixed json blob
 	if _, err := c.conn.Write(jsonBlobLenBuf.Bytes()); err != nil {
-		errs <- fmt.Errorf("could not write json length to sibling: %v", err)
-		return
+		return fmt.Errorf("could not write json length to sibling: %v", err)
 	}
 	if _, err := c.conn.Write(jsonBlob.Bytes()); err != nil {
-		errs <- fmt.Errorf("could not write json to sibling: %v", err)
-		return
+		return fmt.Errorf("could not write json to sibling: %v", err)
 	}
 
 	// Write all files it's expecting
 	if err := fdsock.Put(c.conn, fds...); err != nil {
-		errs <- fmt.Errorf("could not write fds to sibling: %v", err)
-		return
+		return fmt.Errorf("could not write fds to sibling: %v", err)
 	}
 
 	// Finally, read ready byte and the handoff is done!
@@ -84,8 +90,7 @@ func (c *sibling) writeFiles(names [][]string, fds []*os.File, errs chan<- error
 		c.readyC <- struct{}{}
 	} else {
 		c.l.Debug("our sibling failed to send us a ready")
-		errs <- fmt.Errorf("sibling did not send us a ready byte: %v, %v", n, b)
-		return
+		return fmt.Errorf("sibling did not send us a ready byte: %v, %v", n, b)
 	}
-	close(errs)
+	return nil
 }
