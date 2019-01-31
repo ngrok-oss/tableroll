@@ -22,7 +22,11 @@ func (c *sibling) String() string {
 	return c.conn.RemoteAddr().String()
 }
 
-func startSibling(l log15.Logger, conn *net.UnixConn, passedFiles map[fileName]*file) (*sibling, error) {
+// passFdsToSibling passes all this processes file descriptors to a sibling
+// over the provided unix connection.  It returns an error channel which will,
+// at most, have one error written to it.
+func passFdsToSibling(l log15.Logger, conn *net.UnixConn, passedFiles map[fileName]*file) (*sibling, <-chan error) {
+	errChan := make(chan error, 1)
 	fds := make([]*os.File, 0, len(passedFiles))
 	fdNames := make([][]string, 0, len(passedFiles))
 	for name, file := range passedFiles {
@@ -37,16 +41,22 @@ func startSibling(l log15.Logger, conn *net.UnixConn, passedFiles map[fileName]*
 		readyC: make(chan struct{}),
 		l:      l,
 	}
-	go c.writeFiles(fdNames, fds)
-	return c, nil
+	go func() {
+		defer close(errChan)
+		err := c.writeFiles(fdNames, fds)
+		if err != nil {
+			errChan <- err
+		}
+	}()
+	return c, errChan
 }
 
-func (c *sibling) writeFiles(names [][]string, fds []*os.File) {
+// writeFiles passes the list of files to the sibling.
+func (c *sibling) writeFiles(names [][]string, fds []*os.File) error {
 	c.l.Info("passing along fds to our sibling", "files", fds)
 	var jsonBlob bytes.Buffer
 	enc := json.NewEncoder(&jsonBlob)
 	if names == nil {
-		// Gob panics on nil
 		names = [][]string{}
 	}
 	if err := enc.Encode(names); err != nil {
@@ -63,16 +73,15 @@ func (c *sibling) writeFiles(names [][]string, fds []*os.File) {
 
 	// Length-prefixed json blob
 	if _, err := c.conn.Write(jsonBlobLenBuf.Bytes()); err != nil {
-		panic("TODO(euank): real error handling: " + err.Error())
+		return fmt.Errorf("could not write json length to sibling: %v", err)
 	}
 	if _, err := c.conn.Write(jsonBlob.Bytes()); err != nil {
-		panic("TODO(euank): real error handling 2: " + err.Error())
+		return fmt.Errorf("could not write json to sibling: %v", err)
 	}
 
 	// Write all files it's expecting
 	if err := fdsock.Put(c.conn, fds...); err != nil {
-		// TODO: this should *not* be a panic for sure
-		panic(err)
+		return fmt.Errorf("could not write fds to sibling: %v", err)
 	}
 
 	// Finally, read ready byte and the handoff is done!
@@ -82,5 +91,7 @@ func (c *sibling) writeFiles(names [][]string, fds []*os.File) {
 		c.readyC <- struct{}{}
 	} else {
 		c.l.Debug("our sibling failed to send us a ready")
+		return fmt.Errorf("sibling did not send us a ready byte: %v, %v", n, b)
 	}
+	return nil
 }

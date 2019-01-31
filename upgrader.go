@@ -1,6 +1,7 @@
 package tableroll
 
 import (
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -10,8 +11,10 @@ import (
 	"github.com/pkg/errors"
 )
 
-// DefaultUpgradeTimeout is the duration before the Upgrader kills the new process if no
-// readiness notification was received.
+// DefaultUpgradeTimeout is the duration in which the upgrader expects the
+// sibling to send a 'Ready' notification after passing over all its file
+// descriptors; If the sibling does not send that it is ready in that duration,
+// this Upgrader will close the sibling's connection and wait for additional connections.
 const DefaultUpgradeTimeout time.Duration = time.Minute
 
 // Upgrader handles zero downtime upgrades and passing files between processes.
@@ -136,6 +139,7 @@ func (u *Upgrader) awaitUpgrade() error {
 			}
 			return errors.Wrap(err, "error accepting upgrade socket request")
 		}
+		defer conn.Close()
 
 		// We got a request, only handle one request at a time via semaphore..
 		// Acquire semaphore, but don't block. This allows informing
@@ -160,19 +164,17 @@ func (u *Upgrader) awaitUpgrade() error {
 		select {
 		case <-u.readyC:
 		default:
-			// TODO: err
-			return errors.New("TODO")
+			return errors.New("this process cannot service an upgrade request until it is ready; not yet marked ready")
 		}
 
 		u.l.Info("passing along the torch")
 		// time to pass our FDs along
-		nextParent, err := startSibling(u.l, conn, u.Fds.copy())
-		if err != nil {
-			return errors.Wrap(err, "can't start next parent")
-		}
+		nextParent, errC := passFdsToSibling(u.l, conn, u.Fds.copy())
 
 		readyTimeout := time.After(u.upgradeTimeout)
 		select {
+		case err := <-errC:
+			return fmt.Errorf("next parent gave us an error: %v", err)
 		case <-u.stopC:
 			return errors.New("terminating")
 		case <-readyTimeout:
@@ -208,9 +210,10 @@ func (u *Upgrader) Ready() error {
 	return u.parent.sendReady()
 }
 
-// Exit returns a channel which is closed when the process should
-// exit.
-func (u *Upgrader) Exit() <-chan struct{} {
+// UpgradeComplete returns a channel which is closed when the managed file
+// descriptors have been passed to the next process, and the next process has
+// indicated it is ready.
+func (u *Upgrader) UpgradeComplete() <-chan struct{} {
 	return u.exitC
 }
 
