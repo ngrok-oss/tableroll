@@ -2,7 +2,6 @@ package tableroll
 
 import (
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -26,8 +25,7 @@ type Upgrader struct {
 	stopOnce   sync.Once
 	stopC      chan struct{}
 	upgradeSem chan struct{}
-	exitC      chan struct{}      // only close this if holding upgradeSem
-	exitFd     neverCloseThisFile // protected by upgradeSem
+	exitC      chan struct{} // only close this if holding upgradeSem
 
 	upgradeSock *net.UnixListener
 
@@ -101,7 +99,7 @@ func newUpgrader(os osIface, coordinationDir string, opts ...Option) (*Upgrader,
 	}
 	s.coord = coord
 	s.parent = parent
-	s.Fds = newFds(files)
+	s.Fds = newFds(s.l, files)
 
 	go func() {
 		for {
@@ -175,24 +173,12 @@ func (u *Upgrader) awaitUpgrade() error {
 
 		readyTimeout := time.After(u.upgradeTimeout)
 		select {
-		case err := <-nextParent.exitedC:
-			if err == nil {
-				return errors.Errorf("next parent %s exited", nextParent)
-			}
-			return errors.Wrapf(err, "next parent %s exited", nextParent)
-
 		case <-u.stopC:
 			return errors.New("terminating")
-
 		case <-readyTimeout:
 			return errors.Errorf("new parent %s timed out", nextParent)
-
-		case file := <-nextParent.readyC:
-			// Save file in exitFd, so that it's only closed when the process
-			// exits. This signals to the new process that the old process
-			// has exited.
-			// TODO: is this a thing?
-			u.exitFd = neverCloseThisFile{file}
+		case <-nextParent.readyC:
+			u.l.Info("next parent is ready, marking ourselves as up for exit")
 			close(u.exitC)
 			return nil
 		}
@@ -235,10 +221,8 @@ func (u *Upgrader) Stop() {
 		// Interrupt any running Upgrade(), and
 		// prevent new upgrade from happening.
 		close(u.stopC)
-		u.upgradeSock.Close()
-
-		// Make sure exitC is closed if no upgrade was running.
 		u.upgradeSem <- struct{}{}
+		u.upgradeSock.Close()
 		select {
 		case <-u.exitC:
 		default:
@@ -246,15 +230,7 @@ func (u *Upgrader) Stop() {
 		}
 		<-u.upgradeSem
 
+		u.l.Info("closing file descriptors")
 		u.Fds.closeUsed()
 	})
-}
-
-// This file must never be closed by the Go runtime, since its used by the
-// child to determine when the parent has died. It must only be closed
-// by the OS.
-// Hence we make sure that this file can't be garbage collected by referencing
-// it from an Upgrader.
-type neverCloseThisFile struct {
-	file *os.File
 }

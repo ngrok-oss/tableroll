@@ -20,7 +20,6 @@ const (
 
 type parent struct {
 	wr          *net.UnixConn
-	exited      <-chan error
 	coordinator *coordinator
 	l           log15.Logger
 }
@@ -93,7 +92,7 @@ func newParent(l log15.Logger, osi osIface, coordinationDir string) (*coordinato
 			sockFiles[i].Fd(),
 		}
 	}
-	l.Info("got fds from old parent", "numfds", len(files))
+	l.Info("got fds from old parent", "files", files)
 
 	// now that we have the FDs from the old parent, we just need to tell it when we're ready and then we're done and happy!
 
