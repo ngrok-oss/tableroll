@@ -98,6 +98,8 @@ func newFds(l log15.Logger, inherited map[fileName]*file) *Fds {
 // Listen returns a listener inherited from the parent process, or creates a
 // new one. It is expected that the caller will close the returned listener
 // once the Upgrader indicates draining is desired.
+// The arguments are passed to net.Listen, and their meaning is described
+// there.
 func (f *Fds) Listen(network, addr string) (net.Listener, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
