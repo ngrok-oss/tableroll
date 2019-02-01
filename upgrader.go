@@ -21,8 +21,7 @@ const DefaultUpgradeTimeout time.Duration = time.Minute
 type Upgrader struct {
 	upgradeTimeout time.Duration
 
-	parent     *parent
-	coord      *coordinator
+	session    *upgradeSession
 	readyOnce  sync.Once
 	readyC     chan struct{}
 	stopOnce   sync.Once
@@ -96,12 +95,17 @@ func newUpgrader(os osIface, coordinationDir string, opts ...Option) (*Upgrader,
 		opt(s)
 	}
 
-	coord, parent, files, err := newParent(s.l, s.os, coordinationDir)
+	sess, err := connectToParent(s.l, s.os, coordinationDir)
 	if err != nil {
 		return nil, err
 	}
-	s.coord = coord
-	s.parent = parent
+	s.session = sess
+	files, err := sess.getFiles()
+	if err != nil {
+		sess.Close()
+		return nil, err
+	}
+
 	s.Fds = newFds(s.l, files)
 
 	go func() {
@@ -197,17 +201,20 @@ func (u *Upgrader) Ready() error {
 		close(u.readyC)
 	})
 
-	if u.parent == nil {
-		// we are the parent!
-		if err := u.coord.BecomeParent(); err != nil {
-			return err
-		}
-		if err := u.coord.Unlock(); err != nil {
-			return err
-		}
-		return nil
+	if !u.session.hasParent() {
+		// If we can't find a parent to request listeners from, then just assume we
+		// are the parent.
+		defer func() {
+			// unlock the coordination dir even if we fail to become the parent, this
+			// gives another process a chance at it even if our caller for some
+			// reason decides to not panic/exit
+			if err := u.session.Close(); err != nil {
+				u.l.Error("error closing upgrade session", "err", err)
+			}
+		}()
+		return u.session.BecomeParent()
 	}
-	return u.parent.sendReady()
+	return u.session.sendReady()
 }
 
 // UpgradeComplete returns a channel which is closed when the managed file
