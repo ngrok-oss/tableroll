@@ -224,6 +224,8 @@ func (u *Upgrader) UpgradeComplete() <-chan struct{} {
 
 // Stop prevents any more upgrades from happening, and closes
 // the exit channel.
+// It also closes any file descriptors in Fds which were inherited but are
+// unused.
 func (u *Upgrader) Stop() {
 	u.stopOnce.Do(func() {
 		// Interrupt any running Upgrade(), and
