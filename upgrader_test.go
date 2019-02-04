@@ -52,6 +52,8 @@ func TestGCingUpgradeHandoff(t *testing.T) {
 	done <- struct{}{}
 }
 
+// TestUpgradeHandoff tests the happy path flow of two servers handing off the listening socket.
+// It includes one client connection that spans the listener handoff and must be drained.
 func TestUpgradeHandoff(t *testing.T) {
 	coordDir, cleanup := tmpDir()
 	defer cleanup()
@@ -64,6 +66,7 @@ func TestUpgradeHandoff(t *testing.T) {
 	defer s1.Close()
 	defer upg1.Stop()
 	c1 := s1.Client()
+	c1t := c1.Transport.(closeIdleTransport)
 
 	go func() {
 		<-server1Reqs
@@ -83,9 +86,11 @@ func TestUpgradeHandoff(t *testing.T) {
 	// now have s2 take over for s1
 	upg2, s2 := createTestServer(t, 2, coordDir, server2Reqs, server2Msgs)
 	defer upg2.Stop()
+	defer s2.Close()
 	<-upg1.UpgradeComplete()
 	s1.Listener.Close()
-	defer s2.Close()
+	// make sure the existing tcp connections aren't re-used anymore
+	c1t.CloseIdleConnections()
 	go func() {
 		<-server2Reqs
 		server2Msgs <- "msg3"
@@ -158,6 +163,64 @@ func TestMutableUpgrading(t *testing.T) {
 	upg2.Stop()
 }
 
+// TestPIDReuse verifies that if a new server gets a pid of a previous server,
+// it can still listen on the `${pid}.sock` socket correctly.
+func TestPIDReuse(t *testing.T) {
+	coordDir, err := ioutil.TempDir("", "tableroll_test")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(coordDir)
+
+	server1Msgs, server2Msgs := make(chan string), make(chan string)
+	server1Reqs, server2Reqs := make(chan struct{}), make(chan struct{})
+
+	// Server 1 starts listening
+	upg1, s1 := createTestServer(t, 1, coordDir, server1Reqs, server1Msgs)
+	defer s1.Close()
+	defer upg1.Stop()
+	c1 := s1.Client()
+	c1t := c1.Transport.(closeIdleTransport)
+
+	go func() {
+		<-server1Reqs
+		server1Msgs <- "msg1"
+	}()
+	assertResp(t, s1.URL, c1, "msg1")
+	// s1 is listening
+
+	// now have s2 take over for s1
+	upg2, s2 := createTestServer(t, 2, coordDir, server2Reqs, server2Msgs)
+	defer upg2.Stop()
+	defer s2.Close()
+	<-upg1.UpgradeComplete()
+	// Shut down server 1, have a new server reuse it
+	s1.Listener.Close()
+	c1t.CloseIdleConnections()
+	upg1.Stop()
+
+	go func() {
+		<-server2Reqs
+		server2Msgs <- "msg2"
+	}()
+	// Using the client for s1 should work for s2 now since the listener was passed along
+	assertResp(t, s1.URL, c1, "msg2")
+
+	// server 3, reusing pid1
+	upg3, s3 := createTestServer(t, 1, coordDir, server1Reqs, server1Msgs)
+	defer upg3.Stop()
+	defer s3.Close()
+
+	<-upg2.UpgradeComplete()
+	s2.Close()
+
+	go func() {
+		<-server1Reqs
+		server1Msgs <- "msg3"
+	}()
+	assertResp(t, s1.URL, c1, "msg3")
+}
+
 func assertResp(t *testing.T, url string, c *http.Client, expected string) {
 	resp, err := c.Get(url)
 	if err != nil {
@@ -205,4 +268,9 @@ func memoryOpenFile(name string) (*os.File, error) {
 		panic(err)
 	}
 	return w, nil
+}
+
+// taken from net/http/httptest/server.go
+type closeIdleTransport interface {
+	CloseIdleConnections()
 }

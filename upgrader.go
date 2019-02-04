@@ -262,7 +262,6 @@ func (u *Upgrader) Stop() {
 		default:
 			close(u.upgradeCompleteC)
 		}
-
 		u.l.Info("closing file descriptors")
 		u.Fds.closeFds()
 	})
