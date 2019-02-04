@@ -135,59 +135,57 @@ func listenSock(osi osIface, coordinationDir string) (*net.UnixListener, error) 
 var errClosed = errors.New("connection closed")
 
 func (u *Upgrader) awaitUpgrade() error {
-	for {
-		conn, err := u.upgradeSock.AcceptUnix()
-		if err != nil {
-			if strings.Contains(err.Error(), "use of closed network connection") {
-				return errClosed
-			}
-			return errors.Wrap(err, "error accepting upgrade socket request")
+	conn, err := u.upgradeSock.AcceptUnix()
+	if err != nil {
+		if strings.Contains(err.Error(), "use of closed network connection") {
+			return errClosed
 		}
-		defer conn.Close()
+		return errors.Wrap(err, "error accepting upgrade socket request")
+	}
+	defer conn.Close()
 
-		// We got a request, only handle one request at a time via semaphore..
-		// Acquire semaphore, but don't block. This allows informing
-		// the user that they are doing too many upgrade requests.
-		select {
-		default:
-			return errors.New("upgrade in progress")
-		case u.upgradeSem <- struct{}{}:
-		}
+	// We got a request, only handle one request at a time via semaphore..
+	// Acquire semaphore, but don't block. This allows informing
+	// the user that they are doing too many upgrade requests.
+	select {
+	default:
+		return errors.New("upgrade in progress")
+	case u.upgradeSem <- struct{}{}:
+	}
 
-		defer func() {
-			<-u.upgradeSem
-		}()
+	defer func() {
+		<-u.upgradeSem
+	}()
 
-		// Make sure we're still ok to perform an upgrade.
-		select {
-		case <-u.exitC:
-			return errors.New("already upgraded")
-		default:
-		}
+	// Make sure we're still ok to perform an upgrade.
+	select {
+	case <-u.exitC:
+		return errors.New("already upgraded")
+	default:
+	}
 
-		select {
-		case <-u.readyC:
-		default:
-			return errors.New("this process cannot service an upgrade request until it is ready; not yet marked ready")
-		}
+	select {
+	case <-u.readyC:
+	default:
+		return errors.New("this process cannot service an upgrade request until it is ready; not yet marked ready")
+	}
 
-		u.l.Info("passing along the torch")
-		// time to pass our FDs along
-		nextParent, errC := passFdsToSibling(u.l, conn, u.Fds.copy())
+	u.l.Info("passing along the torch")
+	// time to pass our FDs along
+	nextParent, errC := passFdsToSibling(u.l, conn, u.Fds.copy())
 
-		readyTimeout := time.After(u.upgradeTimeout)
-		select {
-		case err := <-errC:
-			return fmt.Errorf("next parent gave us an error: %v", err)
-		case <-u.stopC:
-			return errors.New("terminating")
-		case <-readyTimeout:
-			return errors.Errorf("new parent %s timed out", nextParent)
-		case <-nextParent.readyC:
-			u.l.Info("next parent is ready, marking ourselves as up for exit")
-			close(u.exitC)
-			return nil
-		}
+	readyTimeout := time.After(u.upgradeTimeout)
+	select {
+	case err := <-errC:
+		return fmt.Errorf("next parent gave us an error: %v", err)
+	case <-u.stopC:
+		return errors.New("terminating")
+	case <-readyTimeout:
+		return errors.Errorf("new parent %s timed out", nextParent)
+	case <-nextParent.readyC:
+		u.l.Info("next parent is ready, marking ourselves as up for exit")
+		close(u.exitC)
+		return nil
 	}
 }
 
