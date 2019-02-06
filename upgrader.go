@@ -123,7 +123,7 @@ func (u *Upgrader) becomeOwner() (bool, error) {
 		return false, err
 	}
 	u.Fds = newFds(u.l, files)
-	return sess.hasParent(), nil
+	return sess.hasOwner(), nil
 }
 
 func listenSock(osi osIface, coordinationDir string) (*net.UnixListener, error) {
@@ -198,7 +198,7 @@ func (u *Upgrader) handleUpgradeRequest(conn *net.UnixConn) {
 			u.l.Error("unable to remain owner after upgrade timeout", "err", err)
 		}
 	case <-nextOwner.readyC:
-		u.l.Info("next parent is ready, marking ourselves as up for exit")
+		u.l.Info("next owner is ready, marking ourselves as up for exit")
 		// ignore error, if we were 'Stopped' we can't transition, but we also
 		// don't care.
 		_ = u.transitionTo(upgraderStateDraining)
@@ -218,18 +218,18 @@ func (u *Upgrader) Ready() error {
 		u.Fds.closeInherited()
 	})
 
-	if !u.session.hasParent() {
-		// If we can't find a parent to request listeners from, then just assume we
-		// are the parent.
+	if !u.session.hasOwner() {
+		// If we can't find a owner to request listeners from, then just assume we
+		// are the owner.
 		defer func() {
-			// unlock the coordination dir even if we fail to become the parent, this
+			// unlock the coordination dir even if we fail to become the owner, this
 			// gives another process a chance at it even if our caller for some
 			// reason decides to not panic/exit
 			if err := u.session.Close(); err != nil {
 				u.l.Error("error closing upgrade session", "err", err)
 			}
 		}()
-		err := u.session.BecomeParent()
+		err := u.session.BecomeOwner()
 		if err != nil {
 			return err
 		}

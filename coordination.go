@@ -13,14 +13,14 @@ import (
 	"github.com/rkt/rkt/pkg/lock"
 )
 
-// errNoParent indicates that either no process currently is marked as
+// errNoOwner indicates that either no process currently is marked as
 // controlling the upgradeable file descriptors (e.g. initial startup case), or
 // a process is supposed to own them but is dead (e.g. it crashed).
-var errNoParent = errors.New("no parent process exists")
+var errNoOwner = errors.New("no owner process exists")
 
 // coordination is used to coordinate between N processes, one of which is the
-// current parent.
-// It must provide means of getting the parent, updating the parent, and
+// current owner.
+// It must provide means of getting the owner, updating the owner, and.
 // ensuring it has unique ownership of that information for the duration
 // between a read and update.
 // It is implemented in this case with unix locks on a file.
@@ -63,9 +63,9 @@ func (c *coordinator) pidFile() string {
 	return filepath.Join(c.dir, "pid")
 }
 
-func (c *coordinator) BecomeParent() error {
+func (c *coordinator) BecomeOwner() error {
 	pid := c.os.Getpid()
-	c.l.Info("writing pid to become parent", "pid", pid)
+	c.l.Info("writing pid to become owner", "pid", pid)
 	return ioutil.WriteFile(c.pidFile(), []byte(strconv.Itoa(pid)), 0755)
 }
 
@@ -74,35 +74,35 @@ func (c *coordinator) Unlock() error {
 	return c.lock.Unlock()
 }
 
-// GetParentPID returns the current 'parent' for this coordination directory.
-// It will return '0' as the PID if there is no parent.
-func (c *coordinator) GetParentPID() (int, error) {
-	c.l.Info("discovering current parent")
+// GetOwnerPID returns the current 'owner' for this coordination directory.
+// It will return '0' as the PID if there is no owner.
+func (c *coordinator) GetOwnerPID() (int, error) {
+	c.l.Info("discovering current owner")
 	data, err := ioutil.ReadFile(c.pidFile())
 	if err != nil {
 		return 0, err
 	}
 	if len(data) == 0 {
-		// empty file, that means no parent
+		// empty file, that means no owner
 		return 0, nil
 	}
 	pid, err := strconv.Atoi(string(data))
 	if err != nil {
 		return 0, fmt.Errorf("unable to parse pid out of data %q: %v", string(data), err)
 	}
-	c.l.Info("found parent", "parent", pid)
+	c.l.Info("found owner", "owner", pid)
 	return pid, nil
 }
 
-func (c *coordinator) ConnectParent() (*net.UnixConn, error) {
-	ppid, err := c.GetParentPID()
+func (c *coordinator) ConnectOwner() (*net.UnixConn, error) {
+	ppid, err := c.GetOwnerPID()
 	if err != nil {
 		return nil, err
 	}
-	c.l.Info("connecting to parent", "parent", ppid)
+	c.l.Info("connecting to owner", "owner", ppid)
 	if ppid == 0 || pidIsDead(c.os, ppid) {
-		c.l.Info("parent does not exist or is dead", "parent", ppid)
-		return nil, errNoParent
+		c.l.Info("owner does not exist or is dead", "owner", ppid)
+		return nil, errNoOwner
 	}
 
 	sockPath := upgradeSockPath(c.dir, ppid)
@@ -116,7 +116,7 @@ func (c *coordinator) ConnectParent() (*net.UnixConn, error) {
 		// its sock.  Our best bet is thus to assume nothing about that process and
 		// try to take over.
 		c.l.Warn("found living pid in coordination dir, but it wasn't listening for us", "pid", ppid, "dialErr", err)
-		return nil, errNoParent
+		return nil, errNoOwner
 	}
 	return conn, nil
 }
