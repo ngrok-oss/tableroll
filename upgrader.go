@@ -1,6 +1,7 @@
 package tableroll
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strings"
@@ -74,12 +75,15 @@ func WithLogger(l log15.Logger) Option {
 // be writeable by the process using tableroll.
 // Canonically, this directory is `/run/${program}/tableroll/`.
 // Any number of options to configure tableroll may also be provided.
-func New(coordinationDir string, opts ...Option) (*Upgrader, error) {
-	return newUpgrader(realOS{}, coordinationDir, opts...)
+// If the passed in context is cancelled, any attempt to connect to an existing
+// owner will be cancelled.  To stop servicing upgrade requests and complete
+// stop the upgrader, the `Stop` method should be called.
+func New(ctx context.Context, coordinationDir string, opts ...Option) (*Upgrader, error) {
+	return newUpgrader(ctx, realOS{}, coordinationDir, opts...)
 }
 
-func newUpgrader(os osIface, coordinationDir string, opts ...Option) (*Upgrader, error) {
-	upgradeListener, err := listenSock(os, coordinationDir)
+func newUpgrader(ctx context.Context, os osIface, coordinationDir string, opts ...Option) (*Upgrader, error) {
+	upgradeListener, err := listenSock(ctx, os, coordinationDir)
 	if err != nil {
 		return nil, errors.Wrapf(err, "error listening on upgrade socket")
 	}
@@ -101,7 +105,7 @@ func newUpgrader(os osIface, coordinationDir string, opts ...Option) (*Upgrader,
 
 	go u.serveUpgrades()
 
-	_, err = u.becomeOwner()
+	_, err = u.becomeOwner(ctx)
 
 	return u, err
 }
@@ -111,13 +115,13 @@ func newUpgrader(os osIface, coordinationDir string, opts ...Option) (*Upgrader,
 // existing owner process.
 // It returns 'false' if it has taken ownership by identifying that no other
 // owner existed.
-func (u *Upgrader) becomeOwner() (bool, error) {
-	sess, err := connectToCurrentOwner(u.l, u.os, u.dir)
+func (u *Upgrader) becomeOwner(ctx context.Context) (bool, error) {
+	sess, err := connectToCurrentOwner(ctx, u.l, u.os, u.dir)
 	if err != nil {
 		return false, err
 	}
 	u.session = sess
-	files, err := sess.getFiles()
+	files, err := sess.getFiles(ctx)
 	if err != nil {
 		sess.Close()
 		return false, err
@@ -126,12 +130,13 @@ func (u *Upgrader) becomeOwner() (bool, error) {
 	return sess.hasOwner(), nil
 }
 
-func listenSock(osi osIface, coordinationDir string) (*net.UnixListener, error) {
+func listenSock(ctx context.Context, osi osIface, coordinationDir string) (*net.UnixListener, error) {
 	listenpath := upgradeSockPath(coordinationDir, osi.Getpid())
-	return net.ListenUnix("unix", &net.UnixAddr{
-		Name: listenpath,
-		Net:  "unix",
-	})
+	l, err := (&net.ListenConfig{}).Listen(ctx, "unix", listenpath)
+	if err != nil {
+		return nil, err
+	}
+	return l.(*net.UnixListener), nil
 }
 
 var errClosed = errors.New("connection closed")

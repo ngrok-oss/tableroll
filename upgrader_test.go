@@ -1,6 +1,7 @@
 package tableroll
 
 import (
+	"context"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
@@ -85,7 +86,7 @@ func createTestServer(t *testing.T, pid int, coordDir string, requests chan<- st
 		w.Write([]byte(resp))
 	}))
 
-	upg, err := newUpgrader(mockOS{pid: pid}, coordDir, WithLogger(l))
+	upg, err := newUpgrader(context.Background(), mockOS{pid: pid}, coordDir, WithLogger(l))
 	if err != nil {
 		t.Fatalf("error creating upgrader: %v", err)
 	}

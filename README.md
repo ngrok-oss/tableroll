@@ -51,11 +51,12 @@ import (
 )
 
 func main() {
+	ctx := context.Background()
 	logger := log15.New()
 	if err := os.MkdirAll("/tmp/testroll", 0700); err != nil {
 		log.Fatalf("can't create coordination dir: %v", err)
 	}
-	upg, err := tableroll.New("/tmp/testroll", tableroll.WithLogger(logger))
+	upg, err := tableroll.New(ctx, "/tmp/testroll", tableroll.WithLogger(logger))
 	if err != nil {
 		panic(err)
 	}

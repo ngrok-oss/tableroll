@@ -1,12 +1,14 @@
 package tableroll
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
@@ -41,8 +43,9 @@ func touchFile(path string) error {
 // lockCoordinationDir takes an exclusive lock on the given coordination
 // directory. It returns a coordinator that holds the lock and may be used to
 // manipulate the directory. If the directory is already locked, the function
-// will block until the lock can be acquired.
-func lockCoordinationDir(os osIface, l log15.Logger, dir string) (*coordinator, error) {
+// will block until the lock can be acquired, or until the passed context is
+// cancelled.
+func lockCoordinationDir(ctx context.Context, os osIface, l log15.Logger, dir string) (*coordinator, error) {
 	l = l.New("dir", dir)
 	coord := &coordinator{dir: dir, l: l, os: os}
 	pidPath := coord.pidFile()
@@ -50,13 +53,26 @@ func lockCoordinationDir(os osIface, l log15.Logger, dir string) (*coordinator, 
 		return nil, err
 	}
 	l.Info("taking lock on coordination dir", "dir", dir)
-	lock, err := lock.ExclusiveLock(pidPath, lock.RegFile)
+	flock, err := lock.NewLock(pidPath, lock.RegFile)
 	if err != nil {
 		return nil, err
 	}
+	for ctx.Err() == nil {
+		err := flock.TryExclusiveLock()
+		if err == nil {
+			// lock get
+			break
+		}
+		if err != lock.ErrLocked {
+			return nil, errors.Wrap(err, "error trying to lock coordination directory")
+		}
+		// lock busy, wait and try again
+		// TODO: mock time for testing speed
+		time.Sleep(100 * time.Millisecond)
+	}
 	l.Info("took lock on coordination dir", "dir", dir)
-	coord.lock = lock
-	return coord, nil
+	coord.lock = flock
+	return coord, ctx.Err()
 }
 
 func (c *coordinator) pidFile() string {
@@ -94,7 +110,7 @@ func (c *coordinator) GetOwnerPID() (int, error) {
 	return pid, nil
 }
 
-func (c *coordinator) ConnectOwner() (*net.UnixConn, error) {
+func (c *coordinator) ConnectOwner(ctx context.Context) (*net.UnixConn, error) {
 	ppid, err := c.GetOwnerPID()
 	if err != nil {
 		return nil, err
@@ -106,17 +122,28 @@ func (c *coordinator) ConnectOwner() (*net.UnixConn, error) {
 	}
 
 	sockPath := upgradeSockPath(c.dir, ppid)
-	conn, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: sockPath, Net: "unix"})
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", sockPath)
 	if err != nil {
-		// Assume this is ECONNREFUSED even though we can't reliably detect it.
+		if isContextDialErr(err) {
+			return nil, err
+		}
+		// Otherwise assume this is ECONNREFUSED even though we can't reliably
+		// detect it.
 		// ECONNREFUSED here means that the pidfile had X in it, process X's pid is
 		// alive (possibly due to reuse), and X is not listening on its socket.
 		// That means X is a misbehaving tableroll process since it should *never*
-		// have let us grabbed the pid lock unless it was also already listening on
-		// its sock.  Our best bet is thus to assume nothing about that process and
-		// try to take over.
+		// have let us grab the pid lock unless it was also already listening on
+		// its socket.  Our best bet is thus to assume that process is not a
+		// tableroll process and just take over.
 		c.l.Warn("found living pid in coordination dir, but it wasn't listening for us", "pid", ppid, "dialErr", err)
 		return nil, errNoOwner
 	}
-	return conn, nil
+	return conn.(*net.UnixConn), nil
+}
+
+func isContextDialErr(err error) bool {
+	if opErr, ok := err.(*net.OpError); ok {
+		err = opErr.Err
+	}
+	return err == context.Canceled || err == context.DeadlineExceeded
 }
