@@ -35,27 +35,38 @@ type coordinator struct {
 	os osIface
 }
 
+func newCoordinator(os osIface, l log15.Logger, dir string) *coordinator {
+	l = l.New("dir", dir)
+	coord := &coordinator{dir: dir, l: l, os: os}
+	return coord
+}
+
+func (c *coordinator) Listen(ctx context.Context) (*net.UnixListener, error) {
+	listenpath := upgradeSockPath(c.dir, c.os.Getpid())
+	l, err := (&net.ListenConfig{}).Listen(ctx, "unix", listenpath)
+	if err != nil {
+		return nil, err
+	}
+	return l.(*net.UnixListener), nil
+}
+
 func touchFile(path string) error {
 	_, err := os.OpenFile(path, os.O_CREATE|os.O_RDONLY, 0755)
 	return err
 }
 
-// lockCoordinationDir takes an exclusive lock on the given coordination
-// directory. It returns a coordinator that holds the lock and may be used to
-// manipulate the directory. If the directory is already locked, the function
-// will block until the lock can be acquired, or until the passed context is
-// cancelled.
-func lockCoordinationDir(ctx context.Context, os osIface, l log15.Logger, dir string) (*coordinator, error) {
-	l = l.New("dir", dir)
-	coord := &coordinator{dir: dir, l: l, os: os}
-	pidPath := coord.pidFile()
+// Lock takes an exclusive lock on the given coordination directory.  If the
+// directory is already locked, the function will block until the lock can be
+// acquired, or until the passed context is cancelled.
+func (c *coordinator) Lock(ctx context.Context) error {
+	pidPath := c.pidFile()
 	if err := touchFile(pidPath); err != nil {
-		return nil, err
+		return err
 	}
-	l.Info("taking lock on coordination dir", "dir", dir)
+	c.l.Info("taking lock on coordination dir")
 	flock, err := lock.NewLock(pidPath, lock.RegFile)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	for ctx.Err() == nil {
 		err := flock.TryExclusiveLock()
@@ -64,28 +75,35 @@ func lockCoordinationDir(ctx context.Context, os osIface, l log15.Logger, dir st
 			break
 		}
 		if err != lock.ErrLocked {
-			return nil, errors.Wrap(err, "error trying to lock coordination directory")
+			return errors.Wrap(err, "error trying to lock coordination directory")
 		}
 		// lock busy, wait and try again
 		// TODO: mock time for testing speed
 		time.Sleep(100 * time.Millisecond)
 	}
-	l.Info("took lock on coordination dir", "dir", dir)
-	coord.lock = flock
-	return coord, ctx.Err()
+	c.l.Info("took lock on coordination dir")
+	c.lock = flock
+	return ctx.Err()
 }
 
 func (c *coordinator) pidFile() string {
 	return filepath.Join(c.dir, "pid")
 }
 
+// BecomeOwner marks this coordinator as the owner of the coordination directory.
+// It should only be called while the lock is held.
 func (c *coordinator) BecomeOwner() error {
 	pid := c.os.Getpid()
 	c.l.Info("writing pid to become owner", "pid", pid)
 	return ioutil.WriteFile(c.pidFile(), []byte(strconv.Itoa(pid)), 0755)
 }
 
+// Unlock unlocks the coordination pid file
 func (c *coordinator) Unlock() error {
+	if c.lock == nil {
+		c.l.Info("not unlocking coordination dir; not locked")
+		return nil
+	}
 	c.l.Info("unlocking coordination dir")
 	return c.lock.Unlock()
 }
@@ -146,4 +164,8 @@ func isContextDialErr(err error) bool {
 		err = opErr.Err
 	}
 	return err == context.Canceled || err == context.DeadlineExceeded
+}
+
+func upgradeSockPath(coordinationDir string, pid int) string {
+	return filepath.Join(coordinationDir, fmt.Sprintf("%d.sock", pid))
 }

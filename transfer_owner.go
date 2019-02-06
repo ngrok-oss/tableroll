@@ -29,8 +29,8 @@ func pidIsDead(osi osIface, pid int) bool {
 	return proc.Signal(syscall.Signal(0)) != nil
 }
 
-func connectToCurrentOwner(ctx context.Context, l log15.Logger, osi osIface, coordinationDir string) (*upgradeSession, error) {
-	coord, err := lockCoordinationDir(ctx, osi, l, coordinationDir)
+func connectToCurrentOwner(ctx context.Context, l log15.Logger, coord *coordinator) (*upgradeSession, error) {
+	err := coord.Lock(ctx)
 	if err != nil {
 		return nil, err
 	}

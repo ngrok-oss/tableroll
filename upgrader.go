@@ -22,10 +22,11 @@ const DefaultUpgradeTimeout time.Duration = time.Minute
 type Upgrader struct {
 	upgradeTimeout time.Duration
 
-	dir       string
-	session   *upgradeSession
-	readyOnce sync.Once
-	stopOnce  sync.Once
+	coord       *coordinator
+	session     *upgradeSession
+	upgradeSock *net.UnixListener
+	readyOnce   sync.Once
+	stopOnce    sync.Once
 
 	stateLock sync.Mutex
 	state     upgraderState
@@ -34,8 +35,6 @@ type Upgrader struct {
 	// is no longer the owner of its Fds.
 	// This also occurs when `Stop` is called.
 	upgradeCompleteC chan struct{}
-
-	upgradeSock *net.UnixListener
 
 	l log15.Logger
 
@@ -83,26 +82,25 @@ func New(ctx context.Context, coordinationDir string, opts ...Option) (*Upgrader
 }
 
 func newUpgrader(ctx context.Context, os osIface, coordinationDir string, opts ...Option) (*Upgrader, error) {
-	upgradeListener, err := listenSock(ctx, os, coordinationDir)
-	if err != nil {
-		return nil, errors.Wrapf(err, "error listening on upgrade socket")
-	}
-
 	noopLogger := log15.New()
 	noopLogger.SetHandler(log15.DiscardHandler())
 	u := &Upgrader{
 		upgradeTimeout:   DefaultUpgradeTimeout,
 		state:            upgraderStateCheckingOwner,
-		upgradeSock:      upgradeListener,
 		upgradeCompleteC: make(chan struct{}),
 		l:                noopLogger,
 		os:               os,
-		dir:              coordinationDir,
 	}
 	for _, opt := range opts {
 		opt(u)
 	}
+	u.coord = newCoordinator(os, u.l, coordinationDir)
 
+	listener, err := u.coord.Listen(ctx)
+	if err != nil {
+		return nil, err
+	}
+	u.upgradeSock = listener
 	go u.serveUpgrades()
 
 	_, err = u.becomeOwner(ctx)
@@ -116,7 +114,7 @@ func newUpgrader(ctx context.Context, os osIface, coordinationDir string, opts .
 // It returns 'false' if it has taken ownership by identifying that no other
 // owner existed.
 func (u *Upgrader) becomeOwner(ctx context.Context) (bool, error) {
-	sess, err := connectToCurrentOwner(ctx, u.l, u.os, u.dir)
+	sess, err := connectToCurrentOwner(ctx, u.l, u.coord)
 	if err != nil {
 		return false, err
 	}
@@ -128,15 +126,6 @@ func (u *Upgrader) becomeOwner(ctx context.Context) (bool, error) {
 	}
 	u.Fds = newFds(u.l, files)
 	return sess.hasOwner(), nil
-}
-
-func listenSock(ctx context.Context, osi osIface, coordinationDir string) (*net.UnixListener, error) {
-	listenpath := upgradeSockPath(coordinationDir, osi.Getpid())
-	l, err := (&net.ListenConfig{}).Listen(ctx, "unix", listenpath)
-	if err != nil {
-		return nil, err
-	}
-	return l.(*net.UnixListener), nil
 }
 
 var errClosed = errors.New("connection closed")
