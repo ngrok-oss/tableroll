@@ -25,7 +25,6 @@ type Upgrader struct {
 	coord       *coordinator
 	session     *upgradeSession
 	upgradeSock *net.UnixListener
-	readyOnce   sync.Once
 	stopOnce    sync.Once
 
 	stateLock sync.Mutex
@@ -208,10 +207,6 @@ func (u *Upgrader) Ready() error {
 	u.stateLock.Lock()
 	defer u.stateLock.Unlock()
 
-	u.readyOnce.Do(func() {
-		u.Fds.closeInherited()
-	})
-
 	if !u.session.hasOwner() {
 		// If we can't find a owner to request listeners from, then just assume we
 		// are the owner.
@@ -262,6 +257,6 @@ func (u *Upgrader) Stop() {
 		}
 
 		u.l.Info("closing file descriptors")
-		u.Fds.closeUsed()
+		u.Fds.closeFds()
 	})
 }

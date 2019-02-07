@@ -91,7 +91,7 @@ func createTestServer(t *testing.T, pid int, coordDir string, requests chan<- st
 		t.Fatalf("error creating upgrader: %v", err)
 	}
 
-	listen, err := upg.Fds.Listen("tcp", "127.0.0.1:0")
+	listen, err := upg.Fds.Listen(context.Background(), "testListen", nil, "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("unable to listen: %v", err)
 	}

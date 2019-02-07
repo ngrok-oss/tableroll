@@ -6,6 +6,6 @@ import (
 	"os"
 )
 
-func dupFile(fh *os.File, name fileName) (*file, error) {
+func dupFile(fh *os.File, name string) (*file, error) {
 	return dupFd(fh.Fd(), name)
 }
