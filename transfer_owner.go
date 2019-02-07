@@ -122,7 +122,7 @@ func (s *upgradeSession) getFiles(ctx context.Context) (map[fileName]*file, erro
 	}
 	sockFiles, err := fdsock.Get(s.wr, len(sockFileNames), sockFileNames)
 	if err != nil {
-		return nil, orContextErr(err)
+		return nil, orContextErr(errors.Wrap(err, "error getting file descriptors"))
 	}
 	if len(sockFiles) != len(names) {
 		panic(errors.Errorf("got %v sockfiles, but expected %v: %+v; %+v", len(sockFiles), len(names), sockFiles, names))
