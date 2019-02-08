@@ -138,3 +138,28 @@ func TestFdsFile(t *testing.T) {
 	}
 	file.Close()
 }
+
+func TestFdsLock(t *testing.T) {
+	fds := newFds(l, nil)
+	defer fds.closeFds()
+
+	ln, err := fds.ListenWith("1", "tcp", "127.0.0.1:0", net.Listen)
+	defer ln.Close()
+	if err != nil {
+		t.Fatalf("expected no error in unlocked fds: %v", err)
+	}
+
+	fds.lockMutations(ErrUpgradeInProgress)
+	_, err = fds.ListenWith("1", "tcp", "127.0.0.1:0", net.Listen)
+	if err != nil {
+		t.Fatalf("expected no error in getting existing listener from locked fds: %v", err)
+	}
+	if _, err = fds.Listener("1"); err != nil {
+		t.Fatalf("expected no error in getting existing listener from locked fds: %v", err)
+	}
+
+	_, err = fds.ListenWith("2", "tcp", "127.0.0.1:0", net.Listen)
+	if err != ErrUpgradeInProgress {
+		t.Fatalf("expected ErrUpgradeInProgress, got %T %q", err, err)
+	}
+}

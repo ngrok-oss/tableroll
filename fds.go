@@ -12,6 +12,25 @@ import (
 	"github.com/pkg/errors"
 )
 
+var (
+	// ErrUpgradeInProgress indicates that an upgrade is in progress. This state
+	// is not necessarily terminal.
+	// This error will be returned if an attempt is made to mutate the file
+	// descriptor store while the upgrader is currently attempting to transfer
+	// all file descriptors elsewhere.
+	ErrUpgradeInProgress = errors.New("an upgrade is currently in progress")
+	// ErrUpgradeCompleted indicates that an upgrade has already happened. This
+	// state is terminal.
+	// This error will be returned if an attempt is made to mutate the file
+	// descriptor store after an upgrade has already completed.
+	ErrUpgradeCompleted = errors.New("an upgrade has completed")
+	// ErrUpgraderStopped indicates the upgrader's Stop method has been called.
+	// This state is terminal.
+	// This error will be returned if an atttempt is made to mutate the file
+	// descriptor store after stopping the upgrader.
+	ErrUpgraderStopped = errors.New("the upgrader has been marked as stopped")
+)
+
 // Listener can be shared between processes.
 type Listener interface {
 	net.Listener
@@ -62,7 +81,7 @@ func newFile(fd uintptr, name string) *file {
 // object.
 type fd struct {
 	// The underlying file object
-	file *file `json:"-"`
+	file *file
 
 	Kind fdKind `json:"kind"`
 	// ID is the id of this file, stored just for pretty-printing
@@ -101,6 +120,11 @@ type Fds struct {
 	// NB: Files in these maps may be in blocking mode.
 	fds map[string]*fd
 
+	// locked indicates whether the addition and removal of new listeners is locked.
+	// When true, all mutations will result in an error with the error 'lockedReason'
+	locked       bool
+	lockedReason error
+
 	l log15.Logger
 }
 
@@ -122,6 +146,20 @@ func newFds(l log15.Logger, inherited map[string]*fd) *Fds {
 	}
 }
 
+func (f *Fds) lockMutations(reason error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.locked = true
+	f.lockedReason = reason
+}
+
+func (f *Fds) unlockMutations() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.locked = false
+	f.lockedReason = nil
+}
+
 // Listen returns a listener inherited from the parent process, or creates a
 // new one. It is expected that the caller will close the returned listener
 // once the Upgrader indicates draining is desired.
@@ -140,6 +178,10 @@ func (f *Fds) Listen(ctx context.Context, id string, cfg *net.ListenConfig, netw
 	}
 	if ln != nil {
 		return ln, nil
+	}
+
+	if f.locked {
+		return nil, f.lockedReason
 	}
 
 	ln, err = cfg.Listen(ctx, network, addr)
@@ -178,6 +220,10 @@ func (f *Fds) ListenWith(id, network, addr string, listenerFunc func(network, ad
 	if ln != nil {
 		return ln, nil
 	}
+	if f.locked {
+		return nil, f.lockedReason
+	}
+
 	ln, err = listenerFunc(network, addr)
 	if err != nil {
 		return nil, err
@@ -239,6 +285,9 @@ func (f *Fds) DialWith(id, network, address string, dialFn func(network, address
 	}
 	if conn != nil {
 		return conn, nil
+	}
+	if f.locked {
+		return nil, f.lockedReason
 	}
 
 	newConn, err := dialFn(network, address)
@@ -311,6 +360,9 @@ func (f *Fds) OpenFileWith(id string, name string, openFunc func(name string) (*
 	if fi != nil {
 		return fi, nil
 	}
+	if f.locked {
+		return nil, f.lockedReason
+	}
 
 	newFi, err := openFunc(name)
 	if err != nil {
@@ -347,6 +399,9 @@ func (f *Fds) File(id string) (*os.File, error) {
 func (f *Fds) Remove(id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.locked {
+		return f.lockedReason
+	}
 
 	item, ok := f.fds[id]
 	if !ok {
