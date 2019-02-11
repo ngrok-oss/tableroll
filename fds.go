@@ -469,7 +469,7 @@ func (f *Fds) closeFds() {
 
 	for _, file := range f.fds {
 		if err := file.file.Close(); err != nil {
-			f.l.Warn("error closing file %v: %v", file, err)
+			f.l.Warn("error closing file", "file", file, "err", err)
 		}
 	}
 }
