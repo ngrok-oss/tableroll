@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"io"
 	"net"
-	"os"
 	"syscall"
 
 	fdsock "github.com/ftrvxmtrx/fd"
@@ -61,7 +60,7 @@ func (s *upgradeSession) hasOwner() bool {
 // a context error, the upgrade session will be closed and a context error will
 // be returned as a wrapped error. The context error may be retreived with
 // errors.Cause in that case.
-func (s *upgradeSession) getFiles(ctx context.Context) (map[fileName]*file, error) {
+func (s *upgradeSession) getFiles(ctx context.Context) (map[string]*fd, error) {
 	s.l.Info("getting fds")
 	if !s.hasOwner() {
 		s.l.Info("no connection present, no files from owner")
@@ -89,52 +88,50 @@ func (s *upgradeSession) getFiles(ctx context.Context) (map[fileName]*file, erro
 		return err
 	}
 
-	// First get the names of files to expect. This also lets us know how many FDs to get
-	var names [][]string
+	// First get the metadata for fds to expect. This also lets us know how many FDs to get
+	fds := []*fd{}
 
 	// Note: use length-prefixing and avoid decoding directly from the socket to
 	// ensure the reader isn't put into buffered mode, at which point file
 	// descriptors can get lost since go's io buffering is obviously not fd
 	// aware.
-	var jsonNameLength int32
-	if err := binary.Read(s.wr, binary.BigEndian, &jsonNameLength); err != nil {
+	var metaJSONLength int32
+	if err := binary.Read(s.wr, binary.BigEndian, &metaJSONLength); err != nil {
 		return nil, orContextErr(errors.Wrap(err, "protocol error: could not read length of json"))
 	}
-	nameJSON := make([]byte, jsonNameLength)
-	if n, err := io.ReadFull(s.wr, nameJSON); err != nil || n != int(jsonNameLength) {
-		return nil, orContextErr(errors.Wrapf(err, "unable to read expected name json length (expected %v, got (%v, %v))", jsonNameLength, n, err))
+	metaJSON := make([]byte, metaJSONLength)
+	if n, err := io.ReadFull(s.wr, metaJSON); err != nil || n != int(metaJSONLength) {
+		return nil, orContextErr(errors.Wrapf(err, "unable to read expected meta json length (expected %v, got (%v, %v))", metaJSONLength, n, err))
 	}
 
-	if err := json.Unmarshal(nameJSON, &names); err != nil {
+	if err := json.Unmarshal(metaJSON, &fds); err != nil {
 		return nil, orContextErr(errors.Wrap(err, "can't decode names from owner process"))
 	}
-	s.l.Debug("expecting files", "names", names)
+	s.l.Debug("expecting files", "fds", fds)
 
 	// Now grab all the FDs from the owner from the socket
-	files := make(map[fileName]*file, len(names))
-	sockFileNames := make([]string, 0, len(files))
-	for _, parts := range names {
+	files := make(map[string]*fd, len(fds))
+	sockFileNames := make([]string, 0, len(fds))
+	for i := range fds {
+		fd := fds[i]
 		// parts[2] is the 'addr', which is the best we've got for a filename.
 		// TODO(euank): should we just use 'key.String()' like is used in newFile?
 		// I want to check this by seeing what the 'filename' is on each end and if
 		// it changes from the owner ith how I have this.
-		sockFileNames = append(sockFileNames, parts[2])
+		sockFileNames = append(sockFileNames, fd.String())
 	}
 	sockFiles, err := fdsock.Get(s.wr, len(sockFileNames), sockFileNames)
 	if err != nil {
 		return nil, orContextErr(errors.Wrap(err, "error getting file descriptors"))
 	}
-	if len(sockFiles) != len(names) {
-		panic(errors.Errorf("got %v sockfiles, but expected %v: %+v; %+v", len(sockFiles), len(names), sockFiles, names))
+	if len(sockFiles) != len(fds) {
+		panic(errors.Errorf("got %v sockfiles, but expected %v: %+v; %+v", len(sockFiles), len(fds), sockFiles, fds))
 	}
-	for i, parts := range names {
-		var key fileName
-		copy(key[:], parts)
+	for i := range fds {
+		fd := fds[i]
+		fd.associateFile(fd.String(), sockFiles[i])
 
-		files[key] = &file{
-			os.NewFile(sockFiles[i].Fd(), key.String()),
-			sockFiles[i].Fd(),
-		}
+		files[fd.ID] = fd
 	}
 	s.l.Info("got fds from old owner", "files", files)
 	return files, nil

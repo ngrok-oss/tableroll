@@ -25,7 +25,6 @@ type Upgrader struct {
 	coord       *coordinator
 	session     *upgradeSession
 	upgradeSock *net.UnixListener
-	readyOnce   sync.Once
 	stopOnce    sync.Once
 
 	stateLock sync.Mutex
@@ -168,6 +167,7 @@ func (u *Upgrader) handleUpgradeRequest(conn *net.UnixConn) {
 	}
 
 	u.l.Info("handling an upgrade request from peer")
+	u.Fds.lockMutations(ErrUpgradeInProgress)
 	// time to pass our FDs along
 	nextOwner, errC := passFdsToSibling(u.l, conn, u.Fds.copy())
 
@@ -185,16 +185,21 @@ func (u *Upgrader) handleUpgradeRequest(conn *net.UnixConn) {
 			// is desired.
 			// At this point, we can't really do anything but complain.
 			u.l.Error("unable to remain owner after upgrade failure", "err", err)
+			return
 		}
+		u.Fds.unlockMutations()
 	case <-readyTimeout.C:
 		u.l.Error("failed to pass file descriptors to next owner", "reason", "timeout")
 		if err := u.transitionTo(upgraderStateOwner); err != nil {
 			u.l.Error("unable to remain owner after upgrade timeout", "err", err)
+			return
 		}
+		u.Fds.unlockMutations()
 	case <-nextOwner.readyC:
 		u.l.Info("next owner is ready, marking ourselves as up for exit")
 		// ignore error, if we were 'Stopped' we can't transition, but we also
 		// don't care.
+		u.Fds.lockMutations(ErrUpgradeCompleted)
 		_ = u.transitionTo(upgraderStateDraining)
 		close(u.upgradeCompleteC)
 	}
@@ -207,10 +212,6 @@ func (u *Upgrader) handleUpgradeRequest(conn *net.UnixConn) {
 func (u *Upgrader) Ready() error {
 	u.stateLock.Lock()
 	defer u.stateLock.Unlock()
-
-	u.readyOnce.Do(func() {
-		u.Fds.closeInherited()
-	})
 
 	if !u.session.hasOwner() {
 		// If we can't find a owner to request listeners from, then just assume we
@@ -252,6 +253,7 @@ func (u *Upgrader) UpgradeComplete() <-chan struct{} {
 func (u *Upgrader) Stop() {
 	u.mustTransitionTo(upgraderStateStopped)
 	u.stopOnce.Do(func() {
+		u.Fds.lockMutations(ErrUpgraderStopped)
 		// Interrupt any running Upgrade(), and
 		// prevent new upgrade from happening.
 		u.upgradeSock.Close()
@@ -262,6 +264,6 @@ func (u *Upgrader) Stop() {
 		}
 
 		u.l.Info("closing file descriptors")
-		u.Fds.closeUsed()
+		u.Fds.closeFds()
 	})
 }

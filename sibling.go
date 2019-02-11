@@ -25,15 +25,11 @@ func (c *sibling) String() string {
 // passFdsToSibling passes all this processes file descriptors to a sibling
 // over the provided unix connection.  It returns an error channel which will,
 // at most, have one error written to it.
-func passFdsToSibling(l log15.Logger, conn *net.UnixConn, passedFiles map[fileName]*file) (*sibling, <-chan error) {
+func passFdsToSibling(l log15.Logger, conn *net.UnixConn, passedFiles map[string]*fd) (*sibling, <-chan error) {
 	errChan := make(chan error, 1)
-	fds := make([]*os.File, 0, len(passedFiles))
-	fdNames := make([][]string, 0, len(passedFiles))
-	for name, file := range passedFiles {
-		nameSlice := make([]string, len(name))
-		copy(nameSlice, name[:])
-		fdNames = append(fdNames, nameSlice)
-		fds = append(fds, file.File)
+	fds := make([]*fd, 0, len(passedFiles))
+	for _, fd := range passedFiles {
+		fds = append(fds, fd)
 	}
 
 	c := &sibling{
@@ -43,7 +39,7 @@ func passFdsToSibling(l log15.Logger, conn *net.UnixConn, passedFiles map[fileNa
 	}
 	go func() {
 		defer close(errChan)
-		err := c.writeFiles(fdNames, fds)
+		err := c.writeFiles(fds)
 		if err != nil {
 			errChan <- err
 		}
@@ -52,14 +48,22 @@ func passFdsToSibling(l log15.Logger, conn *net.UnixConn, passedFiles map[fileNa
 }
 
 // writeFiles passes the list of files to the sibling.
-func (c *sibling) writeFiles(names [][]string, fds []*os.File) error {
+func (c *sibling) writeFiles(fds []*fd) error {
+	validFds := make([]*fd, 0, len(fds))
+	rawFds := make([]*os.File, 0, len(fds))
+	for i := range fds {
+		fd := fds[i]
+		if fd.file == nil {
+			continue
+		}
+		rawFds = append(rawFds, fd.file.File)
+		validFds = append(validFds, fd)
+	}
+
 	c.l.Info("passing along fds to our sibling", "files", fds)
 	var jsonBlob bytes.Buffer
 	enc := json.NewEncoder(&jsonBlob)
-	if names == nil {
-		names = [][]string{}
-	}
-	if err := enc.Encode(names); err != nil {
+	if err := enc.Encode(validFds); err != nil {
 		panic(err)
 	}
 
@@ -80,7 +84,7 @@ func (c *sibling) writeFiles(names [][]string, fds []*os.File) error {
 	}
 
 	// Write all files it's expecting
-	if err := fdsock.Put(c.conn, fds...); err != nil {
+	if err := fdsock.Put(c.conn, rawFds...); err != nil {
 		return fmt.Errorf("could not write fds to sibling: %v", err)
 	}
 

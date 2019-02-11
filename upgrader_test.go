@@ -3,9 +3,11 @@ package tableroll
 import (
 	"context"
 	"io/ioutil"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"testing"
 
 	"github.com/inconshreveable/log15"
@@ -13,12 +15,19 @@ import (
 
 var l = log15.New()
 
-func TestUpgradeHandoff(t *testing.T) {
-	coordDir, err := ioutil.TempDir("", "tableroll_test")
+func tmpDir() (string, func()) {
+	dir, err := ioutil.TempDir("", "tableroll_test")
 	if err != nil {
 		panic(err)
 	}
-	defer os.RemoveAll(coordDir)
+	return dir, func() {
+		os.RemoveAll(dir)
+	}
+}
+
+func TestUpgradeHandoff(t *testing.T) {
+	coordDir, cleanup := tmpDir()
+	defer cleanup()
 
 	server1Msgs, server2Msgs := make(chan string), make(chan string)
 	server1Reqs, server2Reqs := make(chan struct{}), make(chan struct{})
@@ -62,6 +71,66 @@ func TestUpgradeHandoff(t *testing.T) {
 	<-msg2Response
 }
 
+func TestMutableUpgrading(t *testing.T) {
+	coordDir, cleanup := tmpDir()
+	defer cleanup()
+
+	upg1, err := newUpgrader(context.Background(), mockOS{pid: 1}, coordDir, WithLogger(l))
+	if err != nil {
+		t.Fatalf("error creating upgrader: %v", err)
+	}
+	if err := upg1.Ready(); err != nil {
+		t.Fatalf("error marking ready: %v", err)
+	}
+
+	upgradeDone := make(chan struct{})
+	expectedFis := map[string]*os.File{}
+	// Mutably add a bunch of fds to the store at random, make sure that all the ones that were added without error are inherited
+	go func() {
+		var err error
+		var fi *os.File
+		for err != ErrUpgradeCompleted {
+			// add 2/3 of the time, remove 1/3 of the time, pool of 1000 ids
+			id := strconv.Itoa(rand.Intn(1000))
+			if expectedFis[id] != nil {
+				if err = upg1.Fds.Remove(id); err == nil {
+					delete(expectedFis, id)
+				} else if err != ErrUpgradeInProgress && err != ErrUpgradeCompleted {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			} else {
+				if fi, err = upg1.Fds.OpenFileWith(id, id, memoryOpenFile); err == nil {
+					expectedFis[id] = fi
+				} else if err != ErrUpgradeInProgress && err != ErrUpgradeCompleted {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			}
+		}
+		close(upgradeDone)
+	}()
+
+	upg2, err := newUpgrader(context.Background(), mockOS{pid: 2}, coordDir, WithLogger(l))
+	if err != nil {
+		t.Fatalf("error creating upgrader: %v", err)
+	}
+	if err := upg2.Ready(); err != nil {
+		t.Fatalf("error marking ready: %v", err)
+	}
+
+	// we expect that upg1 should have gotten a terminal error and we should have
+	// got the full set of ids it thinks it stored
+	<-upgradeDone
+
+	for id, expectedFi := range expectedFis {
+		if fi, err := upg2.Fds.File(id); fi != fi || err != nil {
+			t.Errorf("expected upg2 to have file for %v of %#v, but had file %#v, err %v", id, expectedFi, fi, err)
+		}
+	}
+
+	upg1.Stop()
+	upg2.Stop()
+}
+
 func assertResp(t *testing.T, url string, c *http.Client, expected string) {
 	resp, err := c.Get(url)
 	if err != nil {
@@ -91,7 +160,7 @@ func createTestServer(t *testing.T, pid int, coordDir string, requests chan<- st
 		t.Fatalf("error creating upgrader: %v", err)
 	}
 
-	listen, err := upg.Fds.Listen("tcp", "127.0.0.1:0")
+	listen, err := upg.Fds.Listen(context.Background(), "testListen", nil, "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("unable to listen: %v", err)
 	}
@@ -101,4 +170,12 @@ func createTestServer(t *testing.T, pid int, coordDir string, requests chan<- st
 		t.Fatalf("unable to mark self as ready: %v", err)
 	}
 	return upg, server
+}
+
+func memoryOpenFile(name string) (*os.File, error) {
+	_, w, err := os.Pipe()
+	if err != nil {
+		panic(err)
+	}
+	return w, nil
 }

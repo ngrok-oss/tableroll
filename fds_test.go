@@ -1,6 +1,7 @@
 package tableroll
 
 import (
+	"context"
 	"io/ioutil"
 	"net"
 	"os"
@@ -9,6 +10,7 @@ import (
 )
 
 func TestFdsListen(t *testing.T) {
+	ctx := context.Background()
 	addrs := [][2]string{
 		{"unix", ""},
 		{"tcp", "localhost:0"},
@@ -17,7 +19,7 @@ func TestFdsListen(t *testing.T) {
 	fds := newFds(l, nil)
 
 	for _, addr := range addrs {
-		ln, err := fds.Listen(addr[0], addr[1])
+		ln, err := fds.Listen(ctx, "1", nil, addr[0], addr[1])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -54,12 +56,12 @@ func TestFdsListener(t *testing.T) {
 	defer unix.Close()
 
 	parent := newFds(l, nil)
-	if err := parent.AddListener(addr.Network(), addr.String(), tcp); err != nil {
+	if _, err := parent.ListenWith("1", addr.Network(), addr.String(), func(_, _ string) (net.Listener, error) { return tcp, nil }); err != nil {
 		t.Fatal("Can't add listener:", err)
 	}
 	tcp.Close()
 
-	if err := parent.AddListener("unix", socketPath, unix.(Listener)); err != nil {
+	if _, err := parent.ListenWith("2", "unix", socketPath, func(_, _ string) (net.Listener, error) { return unix.(Listener), nil }); err != nil {
 		t.Fatal("Can't add listener:", err)
 	}
 	unix.Close()
@@ -69,7 +71,7 @@ func TestFdsListener(t *testing.T) {
 	}
 
 	child := newFds(l, parent.copy())
-	ln, err := child.Listener(addr.Network(), addr.String())
+	ln, err := child.Listener("1")
 	if err != nil {
 		t.Fatal("Can't get listener:", err)
 	}
@@ -78,29 +80,29 @@ func TestFdsListener(t *testing.T) {
 	}
 	ln.Close()
 
-	child.closeInherited()
+	child.Remove("2")
 	if _, err := os.Stat(socketPath); err == nil {
-		t.Error("closeInherited() did not unlink socketPath")
+		t.Error("Remove() did not unlink socketPath")
 	}
 }
 
 func TestFdsConn(t *testing.T) {
-	unix, err := net.ListenUnixgram("unixgram", &net.UnixAddr{
-		Net:  "unixgram",
-		Name: "",
+	parent := newFds(l, nil)
+	unixConn, err := parent.DialWith("1", "unixgram", "", func(_, _ string) (net.Conn, error) {
+		return net.ListenUnixgram("unixgram", &net.UnixAddr{
+			Net:  "unixgram",
+			Name: "",
+		})
 	})
 	if err != nil {
-		t.Fatal(err)
-	}
-
-	parent := newFds(l, nil)
-	if err := parent.AddConn("unixgram", "", unix); err != nil {
 		t.Fatal("Can't add conn:", err)
 	}
-	unix.Close()
+	unixConn.Close()
+	defer parent.Remove("1")
 
 	child := newFds(l, parent.copy())
-	conn, err := child.Conn("unixgram", "")
+	defer child.Remove("1")
+	conn, err := child.Conn("1")
 	if err != nil {
 		t.Fatal("Can't get conn:", err)
 	}
@@ -118,10 +120,13 @@ func TestFdsFile(t *testing.T) {
 	defer r.Close()
 
 	parent := newFds(l, nil)
-	if err := parent.AddFile("test", w); err != nil {
+	if _, err := parent.OpenFileWith("test", "test", func(_ string) (*os.File, error) {
+		return w, nil
+	}); err != nil {
 		t.Fatal("Can't add file:", err)
 	}
 	w.Close()
+	defer parent.Remove("test")
 
 	child := newFds(l, parent.copy())
 	file, err := child.File("test")
@@ -132,4 +137,29 @@ func TestFdsFile(t *testing.T) {
 		t.Fatal("Missing file")
 	}
 	file.Close()
+}
+
+func TestFdsLock(t *testing.T) {
+	fds := newFds(l, nil)
+	defer fds.closeFds()
+
+	ln, err := fds.ListenWith("1", "tcp", "127.0.0.1:0", net.Listen)
+	defer ln.Close()
+	if err != nil {
+		t.Fatalf("expected no error in unlocked fds: %v", err)
+	}
+
+	fds.lockMutations(ErrUpgradeInProgress)
+	_, err = fds.ListenWith("1", "tcp", "127.0.0.1:0", net.Listen)
+	if err != nil {
+		t.Fatalf("expected no error in getting existing listener from locked fds: %v", err)
+	}
+	if _, err = fds.Listener("1"); err != nil {
+		t.Fatalf("expected no error in getting existing listener from locked fds: %v", err)
+	}
+
+	_, err = fds.ListenWith("2", "tcp", "127.0.0.1:0", net.Listen)
+	if err != ErrUpgradeInProgress {
+		t.Fatalf("expected ErrUpgradeInProgress, got %T %q", err, err)
+	}
 }
