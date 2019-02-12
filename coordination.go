@@ -51,7 +51,8 @@ func (c *coordinator) Listen(ctx context.Context) (*net.UnixListener, error) {
 }
 
 func touchFile(path string) error {
-	_, err := os.OpenFile(path, os.O_CREATE|os.O_RDONLY, 0755)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDONLY, 0755)
+	f.Close()
 	return err
 }
 
