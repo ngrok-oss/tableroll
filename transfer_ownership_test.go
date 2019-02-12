@@ -8,6 +8,7 @@ import (
 
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
+	"k8s.io/utils/clock"
 )
 
 func TestGetFilesCtxCancel(t *testing.T) {
@@ -18,13 +19,13 @@ func TestGetFilesCtxCancel(t *testing.T) {
 		panic(err)
 	}
 	defer os.RemoveAll(tmpdir)
-	parent := newCoordinator(mockOS{pid: 1}, l, tmpdir)
+	parent := newCoordinator(clock.RealClock{}, mockOS{pid: 1}, l, tmpdir)
 	parent.Listen(ctx)
 	parent.Lock(ctx)
 	parent.BecomeOwner()
 	parent.Unlock()
 
-	newParent := newCoordinator(mockOS{pid: 2}, l, tmpdir)
+	newParent := newCoordinator(clock.RealClock{}, mockOS{pid: 2}, l, tmpdir)
 
 	sess, err := connectToCurrentOwner(ctx, l, newParent)
 	if err != nil {

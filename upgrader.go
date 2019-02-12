@@ -10,6 +10,7 @@ import (
 
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
+	"k8s.io/utils/clock"
 )
 
 // DefaultUpgradeTimeout is the duration in which the upgrader expects the
@@ -40,7 +41,8 @@ type Upgrader struct {
 	Fds *Fds
 
 	// mocks
-	os osIface
+	os    osIface
+	clock clock.Clock
 }
 
 // Option is an option function for Upgrader.
@@ -77,10 +79,10 @@ func WithLogger(l log15.Logger) Option {
 // owner will be cancelled.  To stop servicing upgrade requests and complete
 // stop the upgrader, the `Stop` method should be called.
 func New(ctx context.Context, coordinationDir string, opts ...Option) (*Upgrader, error) {
-	return newUpgrader(ctx, realOS{}, coordinationDir, opts...)
+	return newUpgrader(ctx, clock.RealClock{}, realOS{}, coordinationDir, opts...)
 }
 
-func newUpgrader(ctx context.Context, os osIface, coordinationDir string, opts ...Option) (*Upgrader, error) {
+func newUpgrader(ctx context.Context, clock clock.Clock, os osIface, coordinationDir string, opts ...Option) (*Upgrader, error) {
 	noopLogger := log15.New()
 	noopLogger.SetHandler(log15.DiscardHandler())
 	u := &Upgrader{
@@ -89,11 +91,12 @@ func newUpgrader(ctx context.Context, os osIface, coordinationDir string, opts .
 		upgradeCompleteC: make(chan struct{}),
 		l:                noopLogger,
 		os:               os,
+		clock:            clock,
 	}
 	for _, opt := range opts {
 		opt(u)
 	}
-	u.coord = newCoordinator(os, u.l, coordinationDir)
+	u.coord = newCoordinator(clock, os, u.l, coordinationDir)
 
 	listener, err := u.coord.Listen(ctx)
 	if err != nil {
@@ -171,7 +174,7 @@ func (u *Upgrader) handleUpgradeRequest(conn *net.UnixConn) {
 	// time to pass our FDs along
 	nextOwner, errC := passFdsToSibling(u.l, conn, u.Fds.copy())
 
-	readyTimeout := time.NewTimer(u.upgradeTimeout)
+	readyTimeout := u.clock.NewTimer(u.upgradeTimeout)
 	defer readyTimeout.Stop()
 	select {
 	case err := <-errC:
@@ -188,7 +191,7 @@ func (u *Upgrader) handleUpgradeRequest(conn *net.UnixConn) {
 			return
 		}
 		u.Fds.unlockMutations()
-	case <-readyTimeout.C:
+	case <-readyTimeout.C():
 		u.l.Error("failed to pass file descriptors to next owner", "reason", "timeout")
 		if err := u.transitionTo(upgraderStateOwner); err != nil {
 			u.l.Error("unable to remain owner after upgrade timeout", "err", err)

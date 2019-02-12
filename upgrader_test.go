@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/inconshreveable/log15"
+	"k8s.io/utils/clock"
+	fakeclock "k8s.io/utils/clock/testing"
 )
 
 var l = log15.New()
@@ -58,11 +60,8 @@ func TestUpgradeHandoff(t *testing.T) {
 	coordDir, cleanup := tmpDir()
 	defer cleanup()
 
-	server1Msgs, server2Msgs := make(chan string), make(chan string)
-	server1Reqs, server2Reqs := make(chan struct{}), make(chan struct{})
-
 	// Server 1 starts listening
-	upg1, s1 := createTestServer(t, 1, coordDir, server1Reqs, server1Msgs)
+	server1Reqs, server1Msgs, upg1, s1 := createTestServer(t, clock.RealClock{}, 1, coordDir)
 	defer s1.Close()
 	defer upg1.Stop()
 	c1 := s1.Client()
@@ -84,7 +83,7 @@ func TestUpgradeHandoff(t *testing.T) {
 	<-server1Reqs
 
 	// now have s2 take over for s1
-	upg2, s2 := createTestServer(t, 2, coordDir, server2Reqs, server2Msgs)
+	server2Reqs, server2Msgs, upg2, s2 := createTestServer(t, clock.RealClock{}, 2, coordDir)
 	defer upg2.Stop()
 	defer s2.Close()
 	<-upg1.UpgradeComplete()
@@ -107,7 +106,7 @@ func TestMutableUpgrading(t *testing.T) {
 	coordDir, cleanup := tmpDir()
 	defer cleanup()
 
-	upg1, err := newUpgrader(context.Background(), mockOS{pid: 1}, coordDir, WithLogger(l))
+	upg1, err := newUpgrader(context.Background(), clock.RealClock{}, mockOS{pid: 1}, coordDir, WithLogger(l))
 	if err != nil {
 		t.Fatalf("error creating upgrader: %v", err)
 	}
@@ -141,7 +140,7 @@ func TestMutableUpgrading(t *testing.T) {
 		close(upgradeDone)
 	}()
 
-	upg2, err := newUpgrader(context.Background(), mockOS{pid: 2}, coordDir, WithLogger(l))
+	upg2, err := newUpgrader(context.Background(), clock.RealClock{}, mockOS{pid: 2}, coordDir, WithLogger(l))
 	if err != nil {
 		t.Fatalf("error creating upgrader: %v", err)
 	}
@@ -176,7 +175,7 @@ func TestPIDReuse(t *testing.T) {
 	server1Reqs, server2Reqs := make(chan struct{}), make(chan struct{})
 
 	// Server 1 starts listening
-	upg1, s1 := createTestServer(t, 1, coordDir, server1Reqs, server1Msgs)
+	server1Reqs, server1Msgs, upg1, s1 := createTestServer(t, clock.RealClock{}, 1, coordDir)
 	defer s1.Close()
 	defer upg1.Stop()
 	c1 := s1.Client()
@@ -190,7 +189,7 @@ func TestPIDReuse(t *testing.T) {
 	// s1 is listening
 
 	// now have s2 take over for s1
-	upg2, s2 := createTestServer(t, 2, coordDir, server2Reqs, server2Msgs)
+	server2Reqs, server2Msgs, upg2, s2 := createTestServer(t, clock.RealClock{}, 2, coordDir)
 	defer upg2.Stop()
 	defer s2.Close()
 	<-upg1.UpgradeComplete()
@@ -207,7 +206,7 @@ func TestPIDReuse(t *testing.T) {
 	assertResp(t, s1.URL, c1, "msg2")
 
 	// server 3, reusing pid1
-	upg3, s3 := createTestServer(t, 1, coordDir, server1Reqs, server1Msgs)
+	server1Reqs, server1Msgs, upg3, s3 := createTestServer(t, clock.RealClock{}, 1, coordDir)
 	defer upg3.Stop()
 	defer s3.Close()
 
@@ -235,7 +234,9 @@ func assertResp(t *testing.T, url string, c *http.Client, expected string) {
 	}
 }
 
-func createTestServer(t *testing.T, pid int, coordDir string, requests chan<- struct{}, responses <-chan string) (*Upgrader, *httptest.Server) {
+func createTestServer(t *testing.T, clock clock.Clock, pid int, coordDir string) (chan struct{}, chan string, *Upgrader, *httptest.Server) {
+	requests := make(chan struct{})
+	responses := make(chan string)
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		l.Info("server got a request", "pid", pid)
 		// Let the test harness know a client is waiting on us
@@ -245,7 +246,7 @@ func createTestServer(t *testing.T, pid int, coordDir string, requests chan<- st
 		w.Write([]byte(resp))
 	}))
 
-	upg, err := newUpgrader(context.Background(), mockOS{pid: pid}, coordDir, WithLogger(l))
+	upg, err := newUpgrader(context.Background(), clock, mockOS{pid: pid}, coordDir, WithLogger(l))
 	if err != nil {
 		t.Fatalf("error creating upgrader: %v", err)
 	}
@@ -259,7 +260,7 @@ func createTestServer(t *testing.T, pid int, coordDir string, requests chan<- st
 	if err := upg.Ready(); err != nil {
 		t.Fatalf("unable to mark self as ready: %v", err)
 	}
-	return upg, server
+	return requests, responses, upg, server
 }
 
 func memoryOpenFile(name string) (*os.File, error) {
@@ -270,7 +271,6 @@ func memoryOpenFile(name string) (*os.File, error) {
 	return w, nil
 }
 
-// taken from net/http/httptest/server.go
 type closeIdleTransport interface {
 	CloseIdleConnections()
 }

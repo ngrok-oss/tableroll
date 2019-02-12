@@ -13,6 +13,7 @@ import (
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
 	"github.com/rkt/rkt/pkg/lock"
+	"k8s.io/utils/clock"
 )
 
 // errNoOwner indicates that either no process currently is marked as
@@ -32,12 +33,13 @@ type coordinator struct {
 	l    log15.Logger
 
 	// mocks
-	os osIface
+	os    osIface
+	clock clock.Clock
 }
 
-func newCoordinator(os osIface, l log15.Logger, dir string) *coordinator {
+func newCoordinator(clock clock.Clock, os osIface, l log15.Logger, dir string) *coordinator {
 	l = l.New("dir", dir)
-	coord := &coordinator{dir: dir, l: l, os: os}
+	coord := &coordinator{dir: dir, l: l, clock: clock, os: os}
 	return coord
 }
 
@@ -79,8 +81,7 @@ func (c *coordinator) Lock(ctx context.Context) error {
 			return errors.Wrap(err, "error trying to lock coordination directory")
 		}
 		// lock busy, wait and try again
-		// TODO: mock time for testing speed
-		time.Sleep(100 * time.Millisecond)
+		c.clock.Sleep(100 * time.Millisecond)
 	}
 	c.l.Info("took lock on coordination dir")
 	c.lock = flock
