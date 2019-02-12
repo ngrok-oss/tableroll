@@ -216,26 +216,28 @@ func (u *Upgrader) Ready() error {
 	u.stateLock.Lock()
 	defer u.stateLock.Unlock()
 
-	if !u.session.hasOwner() {
-		// If we can't find a owner to request listeners from, then just assume we
-		// are the owner.
-		defer func() {
-			// unlock the coordination dir even if we fail to become the owner, this
-			// gives another process a chance at it even if our caller for some
-			// reason decides to not panic/exit
-			if err := u.session.Close(); err != nil {
-				u.l.Error("error closing upgrade session", "err", err)
-			}
-		}()
-		err := u.session.BecomeOwner()
-		if err != nil {
+	if err := u.state.canTransitionTo(upgraderStateOwner); err != nil {
+		return errors.Errorf("cannot become ready: %v", err)
+	}
+
+	defer func() {
+		// unlock the coordination dir even if we fail to become the owner, this
+		// gives another process a chance at it even if our caller for some
+		// reason decides to not panic/exit
+		if err := u.session.Close(); err != nil {
+			u.l.Error("error closing upgrade session", "err", err)
+		}
+	}()
+	if u.session.hasOwner() {
+		// We have to notify the owner we're ready if they exist.
+		if err := u.session.sendReady(); err != nil {
 			return err
 		}
-		return u.state.transitionTo(upgraderStateOwner)
 	}
-	if err := u.session.sendReady(); err != nil {
+	if err := u.session.BecomeOwner(); err != nil {
 		return err
 	}
+	// if we notified the owner without error, or one didn't exist, we're the owner now
 	if err := u.state.transitionTo(upgraderStateOwner); err != nil {
 		return err
 	}

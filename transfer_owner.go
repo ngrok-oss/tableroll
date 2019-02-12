@@ -143,14 +143,6 @@ func (s *upgradeSession) sendReady() error {
 		return errors.Wrap(err, "can't notify owner process")
 	}
 	s.l.Info("notified the owner process we're ready")
-	// Now that we're ready and the old process is draining, take over and relinquish the lock.
-	if err := s.coordinator.BecomeOwner(); err != nil {
-		return err
-	}
-	if err := s.coordinator.Unlock(); err != nil {
-		return err
-	}
-	s.l.Info("unlocked coordinator directory")
 	return nil
 }
 
