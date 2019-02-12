@@ -113,6 +113,7 @@ func TestMutableUpgrading(t *testing.T) {
 	if err := upg1.Ready(); err != nil {
 		t.Fatalf("error marking ready: %v", err)
 	}
+	defer upg1.Stop()
 
 	upgradeDone := make(chan struct{})
 	expectedFis := map[string]*os.File{}
@@ -158,8 +159,8 @@ func TestMutableUpgrading(t *testing.T) {
 		}
 	}
 
-	upg1.Stop()
 	upg2.Stop()
+	<-upg2.UpgradeComplete()
 }
 
 // TestPIDReuse verifies that if a new server gets a pid of a previous server,
@@ -216,6 +217,70 @@ func TestPIDReuse(t *testing.T) {
 	go func() {
 		<-server1Reqs
 		server1Msgs <- "msg3"
+	}()
+	assertResp(t, s1.URL, c1, "msg3")
+}
+
+// TestFdPassMultipleTimes tests that a given owner process can attempt to pass
+// the same listening fds to multiple processes if a 'Ready' is not received in
+// time.
+func TestFdPassMultipleTimes(t *testing.T) {
+	ctx := context.Background()
+	clock := fakeclock.NewFakeClock(time.Now())
+	coordDir, cleanup := tmpDir()
+	defer cleanup()
+
+	server1Reqs, server1Msgs, upg1, s1 := createTestServer(t, clock, 1, coordDir)
+	defer upg1.Stop()
+	defer s1.Close()
+	c1 := s1.Client()
+	c1t := c1.Transport.(closeIdleTransport)
+
+	go func() {
+		<-server1Reqs
+		server1Msgs <- "msg1"
+	}()
+	assertResp(t, s1.URL, c1, "msg1")
+	// s1 listening
+
+	syncUpgraderTimeout := make(chan struct{})
+	go func() {
+		// Now make an s2 that fails to ready-up
+		upg2, err := newUpgrader(ctx, clock, mockOS{pid: 2}, coordDir, WithLogger(l))
+		if err != nil {
+			t.Fatalf("expected no error creating upgrader: %v", err)
+		}
+		// now the upgrader is connected, but not 'Ready', so the server should be
+		// waiting on a ready timeout soon
+		syncUpgraderTimeout <- struct{}{}
+		// wait for the server to get a timeout before we stop, otherwise
+		// `HasWaiters` could deadlock due to `Stop` causing the server to not
+		// timeout
+		<-syncUpgraderTimeout
+		upg2.Stop()
+	}()
+	<-syncUpgraderTimeout
+	// wait for the upgrade server to start waiting for a ready, then skip
+	// forward 3 minutes since the timeout is 2 minutes by default
+	for !clock.HasWaiters() {
+		time.Sleep(1 * time.Millisecond)
+	}
+	clock.Step(3 * time.Minute)
+	syncUpgraderTimeout <- struct{}{}
+
+	server3Msgs := make(chan string)
+	server3Reqs := make(chan struct{})
+	// now see that we get a working s3
+	server3Reqs, server3Msgs, upg3, s3 := createTestServer(t, clock, 3, coordDir)
+	defer upg3.Stop()
+	defer s3.Close()
+	<-upg1.UpgradeComplete()
+	s1.Listener.Close()
+	c1t.CloseIdleConnections()
+
+	go func() {
+		<-server3Reqs
+		server3Msgs <- "msg3"
 	}()
 	assertResp(t, s1.URL, c1, "msg3")
 }
