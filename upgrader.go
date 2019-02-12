@@ -252,6 +252,9 @@ func (u *Upgrader) UpgradeComplete() <-chan struct{} {
 // unused.
 func (u *Upgrader) Stop() {
 	u.mustTransitionTo(upgraderStateStopped)
+	if u.session != nil {
+		u.session.Close()
+	}
 	u.stopOnce.Do(func() {
 		u.Fds.lockMutations(ErrUpgraderStopped)
 		// Interrupt any running Upgrade(), and
