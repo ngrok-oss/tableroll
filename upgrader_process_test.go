@@ -6,30 +6,30 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/ioutil"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 const (
 	MsgReady         = "ready"
-	MsgServedRequest = "served-http-request"
+	MsgServedRequest = "served-request"
 )
 
 const testAddr = "127.0.0.1:44090"
 
 func TestBasicProcessUpgrade(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	tmpdir, cleanup := tmpDir()
 	defer cleanup()
 
-	stdout, errC, exitC, cmd1 := runHelper(t, tmpdir, "main1")
-	defer func() {
-		if cmd1.Process != nil {
-			cmd1.Process.Kill()
-		}
-	}()
+	stdout, errC, exitC := runHelper(t, ctx, tmpdir, "main1")
 
 	select {
 	case msg := <-stdout:
@@ -65,12 +65,7 @@ func TestBasicProcessUpgrade(t *testing.T) {
 	}
 
 	// Now pass fds to process 2
-	stdout2, errC2, exitC2, cmd2 := runHelper(t, tmpdir, "main1")
-	defer func() {
-		if cmd2.Process != nil {
-			cmd2.Process.Kill()
-		}
-	}()
+	stdout2, errC2, exitC2 := runHelper(t, ctx, tmpdir, "main1")
 
 	// process 1 should exit
 	select {
@@ -114,13 +109,107 @@ func TestBasicProcessUpgrade(t *testing.T) {
 	}
 }
 
-func runHelper(t *testing.T, dir string, funcName string) (<-chan string, <-chan error, <-chan int, *exec.Cmd) {
-	child := exec.Command(os.Args[0], "-test.run=TestSpawnHelper", "--")
+func TestUnixMultiProcessUpgrade(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tmpdir, cleanup := tmpDir()
+	defer cleanup()
+
+	sock := filepath.Join(tmpdir, "testsock")
+	stdout, errC, exitC := runHelper(t, ctx, tmpdir, "main2")
+
+	select {
+	case msg := <-stdout:
+		if msg != MsgReady {
+			t.Fatalf("expected ready, got %q", msg)
+		}
+	case err := <-errC:
+		t.Fatalf("unexpected err: %v", err)
+	case exit := <-exitC:
+		t.Fatalf("unexpected exit: %v", exit)
+	}
+
+	// process 1 listening and ready, make a request
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatalf("expected no error in get")
+	}
+	data, _ := ioutil.ReadAll(conn)
+	if string(data) != "hello world" {
+		t.Fatalf("expected hello world, got %s", data)
+	}
+	// server1 should have got the request
+	select {
+	case msg := <-stdout:
+		if msg != MsgServedRequest {
+			t.Fatalf("expected served request, got %q", msg)
+		}
+	case err := <-errC:
+		t.Fatalf("unexpected err: %v", err)
+	case exit := <-exitC:
+		t.Fatalf("unexpected exit: %v", exit)
+	}
+
+	prevExit := exitC
+	// now pass fds through 10 more processes
+	for i := 0; i < 10; i++ {
+		// Now pass fds to process n
+		stdoutn, errCn, exitCn := runHelper(t, ctx, tmpdir, "main2")
+
+		// process n-1 should exit
+		exit := <-prevExit
+		if exit != 0 {
+			t.Fatalf("expected 0 exit: %v", exit)
+		}
+
+		// process 2 should be ready
+		select {
+		case msg := <-stdoutn:
+			if msg != MsgReady {
+				t.Fatalf("expected ready, got %v", msg)
+			}
+		case err := <-errCn:
+			t.Fatalf("unexpected err: %v", err)
+		case exit := <-exitCn:
+			t.Fatalf("unexpected exit: %v", exit)
+		}
+
+		// Process 2 will now serve our request
+		conn, err = net.Dial("unix", sock)
+		if err != nil {
+			t.Fatalf("expected no error in get")
+		}
+		data, _ = ioutil.ReadAll(conn)
+		if string(data) != "hello world" {
+			t.Fatalf("expected hello world, got %s", data)
+		}
+		// server1 should have got the request
+		select {
+		case msg := <-stdoutn:
+			if msg != MsgServedRequest {
+				t.Fatalf("expected served request, got %q", msg)
+			}
+		case err := <-errCn:
+			t.Fatalf("unexpected err: %v", err)
+		case exit := <-exitCn:
+			t.Fatalf("unexpected exit: %v", exit)
+		}
+
+		prevExit = exitCn
+	}
+}
+
+func runHelper(t *testing.T, ctx context.Context, dir string, funcName string) (<-chan string, <-chan error, <-chan int) {
+	child := exec.CommandContext(ctx, os.Args[0], "-test.run=TestSpawnHelper", "--")
 	stderr, _ := child.StderrPipe()
 	stdout, _ := child.StdoutPipe()
 
 	var stderrBuffer bytes.Buffer
-	go io.Copy(&stderrBuffer, stderr)
+	stderrEOF := make(chan struct{})
+	go func() {
+		io.Copy(&stderrBuffer, stderr)
+		stderrEOF <- struct{}{}
+	}()
 
 	child.Env = append(child.Env, []string{
 		"MAIN_FUNC=" + funcName,
@@ -143,6 +232,7 @@ func runHelper(t *testing.T, dir string, funcName string) (<-chan string, <-chan
 	}()
 	go func() {
 		err := child.Run()
+		<-stderrEOF
 		if stderrBuffer.Len() != 0 {
 			errorChan <- fmt.Errorf("stderr: %v", stderrBuffer.String())
 		}
@@ -150,9 +240,10 @@ func runHelper(t *testing.T, dir string, funcName string) (<-chan string, <-chan
 			errorChan <- err
 		}
 		exitChan <- 0
+		close(exitChan)
 	}()
 
-	return stdoutChan, errorChan, exitChan, child
+	return stdoutChan, errorChan, exitChan
 }
 
 // TestSpawnUpgrader isn't a real test, it's run from other tests in this file
@@ -167,6 +258,8 @@ func TestSpawnHelper(t *testing.T) {
 	switch funcName {
 	case "main1":
 		os.Exit(main1())
+	case "main2":
+		os.Exit(main2())
 	default:
 		fmt.Fprintf(os.Stderr, "unknown main function: %v", funcName)
 		os.Exit(1)
@@ -203,5 +296,45 @@ func main1() int {
 
 	<-upg.UpgradeComplete()
 	_ = server.Shutdown(ctx)
+	return 0
+}
+
+// main1, but unix sockets
+func main2() int {
+	ctx := context.Background()
+	tableRollDir := os.Getenv("TABLEROLL_DIR")
+
+	upg, err := New(ctx, tableRollDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v", err)
+		return 1
+	}
+
+	sockPath := filepath.Join(tableRollDir, "testsock")
+	ln, err := upg.Fds.Listen(ctx, sockPath, nil, "unix", sockPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v", err)
+		return 1
+	}
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conn.Write([]byte("hello world"))
+			conn.Close()
+			fmt.Println(MsgServedRequest)
+		}
+	}()
+
+	if err := upg.Ready(); err != nil {
+		fmt.Fprintf(os.Stderr, "%v", err)
+		return 1
+	}
+	fmt.Println(MsgReady)
+
+	<-upg.UpgradeComplete()
+	_ = ln.Close()
 	return 0
 }
