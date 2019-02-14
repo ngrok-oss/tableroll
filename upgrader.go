@@ -10,6 +10,7 @@ import (
 
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
+	"k8s.io/utils/clock"
 )
 
 // DefaultUpgradeTimeout is the duration in which the upgrader expects the
@@ -40,7 +41,8 @@ type Upgrader struct {
 	Fds *Fds
 
 	// mocks
-	os osIface
+	os    osIface
+	clock clock.Clock
 }
 
 // Option is an option function for Upgrader.
@@ -77,10 +79,10 @@ func WithLogger(l log15.Logger) Option {
 // owner will be cancelled.  To stop servicing upgrade requests and complete
 // stop the upgrader, the `Stop` method should be called.
 func New(ctx context.Context, coordinationDir string, opts ...Option) (*Upgrader, error) {
-	return newUpgrader(ctx, realOS{}, coordinationDir, opts...)
+	return newUpgrader(ctx, clock.RealClock{}, realOS{}, coordinationDir, opts...)
 }
 
-func newUpgrader(ctx context.Context, os osIface, coordinationDir string, opts ...Option) (*Upgrader, error) {
+func newUpgrader(ctx context.Context, clock clock.Clock, os osIface, coordinationDir string, opts ...Option) (*Upgrader, error) {
 	noopLogger := log15.New()
 	noopLogger.SetHandler(log15.DiscardHandler())
 	u := &Upgrader{
@@ -89,11 +91,12 @@ func newUpgrader(ctx context.Context, os osIface, coordinationDir string, opts .
 		upgradeCompleteC: make(chan struct{}),
 		l:                noopLogger,
 		os:               os,
+		clock:            clock,
 	}
 	for _, opt := range opts {
 		opt(u)
 	}
-	u.coord = newCoordinator(os, u.l, coordinationDir)
+	u.coord = newCoordinator(clock, os, u.l, coordinationDir)
 
 	listener, err := u.coord.Listen(ctx)
 	if err != nil {
@@ -171,7 +174,7 @@ func (u *Upgrader) handleUpgradeRequest(conn *net.UnixConn) {
 	// time to pass our FDs along
 	nextOwner, errC := passFdsToSibling(u.l, conn, u.Fds.copy())
 
-	readyTimeout := time.NewTimer(u.upgradeTimeout)
+	readyTimeout := u.clock.NewTimer(u.upgradeTimeout)
 	defer readyTimeout.Stop()
 	select {
 	case err := <-errC:
@@ -188,7 +191,7 @@ func (u *Upgrader) handleUpgradeRequest(conn *net.UnixConn) {
 			return
 		}
 		u.Fds.unlockMutations()
-	case <-readyTimeout.C:
+	case <-readyTimeout.C():
 		u.l.Error("failed to pass file descriptors to next owner", "reason", "timeout")
 		if err := u.transitionTo(upgraderStateOwner); err != nil {
 			u.l.Error("unable to remain owner after upgrade timeout", "err", err)
@@ -213,26 +216,28 @@ func (u *Upgrader) Ready() error {
 	u.stateLock.Lock()
 	defer u.stateLock.Unlock()
 
-	if !u.session.hasOwner() {
-		// If we can't find a owner to request listeners from, then just assume we
-		// are the owner.
-		defer func() {
-			// unlock the coordination dir even if we fail to become the owner, this
-			// gives another process a chance at it even if our caller for some
-			// reason decides to not panic/exit
-			if err := u.session.Close(); err != nil {
-				u.l.Error("error closing upgrade session", "err", err)
-			}
-		}()
-		err := u.session.BecomeOwner()
-		if err != nil {
+	if err := u.state.canTransitionTo(upgraderStateOwner); err != nil {
+		return errors.Errorf("cannot become ready: %v", err)
+	}
+
+	defer func() {
+		// unlock the coordination dir even if we fail to become the owner, this
+		// gives another process a chance at it even if our caller for some
+		// reason decides to not panic/exit
+		if err := u.session.Close(); err != nil {
+			u.l.Error("error closing upgrade session", "err", err)
+		}
+	}()
+	if u.session.hasOwner() {
+		// We have to notify the owner we're ready if they exist.
+		if err := u.session.sendReady(); err != nil {
 			return err
 		}
-		return u.state.transitionTo(upgraderStateOwner)
 	}
-	if err := u.session.sendReady(); err != nil {
+	if err := u.session.BecomeOwner(); err != nil {
 		return err
 	}
+	// if we notified the owner without error, or one didn't exist, we're the owner now
 	if err := u.state.transitionTo(upgraderStateOwner); err != nil {
 		return err
 	}
@@ -252,6 +257,9 @@ func (u *Upgrader) UpgradeComplete() <-chan struct{} {
 // unused.
 func (u *Upgrader) Stop() {
 	u.mustTransitionTo(upgraderStateStopped)
+	if u.session != nil {
+		u.session.Close()
+	}
 	u.stopOnce.Do(func() {
 		u.Fds.lockMutations(ErrUpgraderStopped)
 		// Interrupt any running Upgrade(), and
@@ -262,7 +270,6 @@ func (u *Upgrader) Stop() {
 		default:
 			close(u.upgradeCompleteC)
 		}
-
 		u.l.Info("closing file descriptors")
 		u.Fds.closeFds()
 	})

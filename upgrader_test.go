@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/inconshreveable/log15"
+	"k8s.io/utils/clock"
+	fakeclock "k8s.io/utils/clock/testing"
 )
 
 var l = log15.New()
@@ -52,18 +54,18 @@ func TestGCingUpgradeHandoff(t *testing.T) {
 	done <- struct{}{}
 }
 
+// TestUpgradeHandoff tests the happy path flow of two servers handing off the listening socket.
+// It includes one client connection that spans the listener handoff and must be drained.
 func TestUpgradeHandoff(t *testing.T) {
 	coordDir, cleanup := tmpDir()
 	defer cleanup()
 
-	server1Msgs, server2Msgs := make(chan string), make(chan string)
-	server1Reqs, server2Reqs := make(chan struct{}), make(chan struct{})
-
 	// Server 1 starts listening
-	upg1, s1 := createTestServer(t, 1, coordDir, server1Reqs, server1Msgs)
+	server1Reqs, server1Msgs, upg1, s1 := createTestServer(t, clock.RealClock{}, 1, coordDir)
 	defer s1.Close()
 	defer upg1.Stop()
 	c1 := s1.Client()
+	c1t := c1.Transport.(closeIdleTransport)
 
 	go func() {
 		<-server1Reqs
@@ -81,11 +83,13 @@ func TestUpgradeHandoff(t *testing.T) {
 	<-server1Reqs
 
 	// now have s2 take over for s1
-	upg2, s2 := createTestServer(t, 2, coordDir, server2Reqs, server2Msgs)
+	server2Reqs, server2Msgs, upg2, s2 := createTestServer(t, clock.RealClock{}, 2, coordDir)
 	defer upg2.Stop()
+	defer s2.Close()
 	<-upg1.UpgradeComplete()
 	s1.Listener.Close()
-	defer s2.Close()
+	// make sure the existing tcp connections aren't re-used anymore
+	c1t.CloseIdleConnections()
 	go func() {
 		<-server2Reqs
 		server2Msgs <- "msg3"
@@ -102,13 +106,14 @@ func TestMutableUpgrading(t *testing.T) {
 	coordDir, cleanup := tmpDir()
 	defer cleanup()
 
-	upg1, err := newUpgrader(context.Background(), mockOS{pid: 1}, coordDir, WithLogger(l))
+	upg1, err := newUpgrader(context.Background(), clock.RealClock{}, mockOS{pid: 1}, coordDir, WithLogger(l))
 	if err != nil {
 		t.Fatalf("error creating upgrader: %v", err)
 	}
 	if err := upg1.Ready(); err != nil {
 		t.Fatalf("error marking ready: %v", err)
 	}
+	defer upg1.Stop()
 
 	upgradeDone := make(chan struct{})
 	expectedFis := map[string]*os.File{}
@@ -136,7 +141,7 @@ func TestMutableUpgrading(t *testing.T) {
 		close(upgradeDone)
 	}()
 
-	upg2, err := newUpgrader(context.Background(), mockOS{pid: 2}, coordDir, WithLogger(l))
+	upg2, err := newUpgrader(context.Background(), clock.RealClock{}, mockOS{pid: 2}, coordDir, WithLogger(l))
 	if err != nil {
 		t.Fatalf("error creating upgrader: %v", err)
 	}
@@ -154,8 +159,130 @@ func TestMutableUpgrading(t *testing.T) {
 		}
 	}
 
-	upg1.Stop()
 	upg2.Stop()
+	<-upg2.UpgradeComplete()
+}
+
+// TestPIDReuse verifies that if a new server gets a pid of a previous server,
+// it can still listen on the `${pid}.sock` socket correctly.
+func TestPIDReuse(t *testing.T) {
+	coordDir, err := ioutil.TempDir("", "tableroll_test")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(coordDir)
+
+	server1Msgs, server2Msgs := make(chan string), make(chan string)
+	server1Reqs, server2Reqs := make(chan struct{}), make(chan struct{})
+
+	// Server 1 starts listening
+	server1Reqs, server1Msgs, upg1, s1 := createTestServer(t, clock.RealClock{}, 1, coordDir)
+	defer s1.Close()
+	defer upg1.Stop()
+	c1 := s1.Client()
+	c1t := c1.Transport.(closeIdleTransport)
+
+	go func() {
+		<-server1Reqs
+		server1Msgs <- "msg1"
+	}()
+	assertResp(t, s1.URL, c1, "msg1")
+	// s1 is listening
+
+	// now have s2 take over for s1
+	server2Reqs, server2Msgs, upg2, s2 := createTestServer(t, clock.RealClock{}, 2, coordDir)
+	defer upg2.Stop()
+	defer s2.Close()
+	<-upg1.UpgradeComplete()
+	// Shut down server 1, have a new server reuse it
+	s1.Listener.Close()
+	c1t.CloseIdleConnections()
+	upg1.Stop()
+
+	go func() {
+		<-server2Reqs
+		server2Msgs <- "msg2"
+	}()
+	// Using the client for s1 should work for s2 now since the listener was passed along
+	assertResp(t, s1.URL, c1, "msg2")
+
+	// server 3, reusing pid1
+	server1Reqs, server1Msgs, upg3, s3 := createTestServer(t, clock.RealClock{}, 1, coordDir)
+	defer upg3.Stop()
+	defer s3.Close()
+
+	<-upg2.UpgradeComplete()
+	s2.Close()
+
+	go func() {
+		<-server1Reqs
+		server1Msgs <- "msg3"
+	}()
+	assertResp(t, s1.URL, c1, "msg3")
+}
+
+// TestFdPassMultipleTimes tests that a given owner process can attempt to pass
+// the same listening fds to multiple processes if a 'Ready' is not received in
+// time.
+func TestFdPassMultipleTimes(t *testing.T) {
+	ctx := context.Background()
+	clock := fakeclock.NewFakeClock(time.Now())
+	coordDir, cleanup := tmpDir()
+	defer cleanup()
+
+	server1Reqs, server1Msgs, upg1, s1 := createTestServer(t, clock, 1, coordDir)
+	defer upg1.Stop()
+	defer s1.Close()
+	c1 := s1.Client()
+	c1t := c1.Transport.(closeIdleTransport)
+
+	go func() {
+		<-server1Reqs
+		server1Msgs <- "msg1"
+	}()
+	assertResp(t, s1.URL, c1, "msg1")
+	// s1 listening
+
+	syncUpgraderTimeout := make(chan struct{})
+	go func() {
+		// Now make an s2 that fails to ready-up
+		upg2, err := newUpgrader(ctx, clock, mockOS{pid: 2}, coordDir, WithLogger(l))
+		if err != nil {
+			t.Fatalf("expected no error creating upgrader: %v", err)
+		}
+		// now the upgrader is connected, but not 'Ready', so the server should be
+		// waiting on a ready timeout soon
+		syncUpgraderTimeout <- struct{}{}
+		// wait for the server to get a timeout before we stop, otherwise
+		// `HasWaiters` could deadlock due to `Stop` causing the server to not
+		// timeout
+		<-syncUpgraderTimeout
+		upg2.Stop()
+	}()
+	<-syncUpgraderTimeout
+	// wait for the upgrade server to start waiting for a ready, then skip
+	// forward 3 minutes since the timeout is 2 minutes by default
+	for !clock.HasWaiters() {
+		time.Sleep(1 * time.Millisecond)
+	}
+	clock.Step(3 * time.Minute)
+	syncUpgraderTimeout <- struct{}{}
+
+	server3Msgs := make(chan string)
+	server3Reqs := make(chan struct{})
+	// now see that we get a working s3
+	server3Reqs, server3Msgs, upg3, s3 := createTestServer(t, clock, 3, coordDir)
+	defer upg3.Stop()
+	defer s3.Close()
+	<-upg1.UpgradeComplete()
+	s1.Listener.Close()
+	c1t.CloseIdleConnections()
+
+	go func() {
+		<-server3Reqs
+		server3Msgs <- "msg3"
+	}()
+	assertResp(t, s1.URL, c1, "msg3")
 }
 
 func assertResp(t *testing.T, url string, c *http.Client, expected string) {
@@ -172,7 +299,9 @@ func assertResp(t *testing.T, url string, c *http.Client, expected string) {
 	}
 }
 
-func createTestServer(t *testing.T, pid int, coordDir string, requests chan<- struct{}, responses <-chan string) (*Upgrader, *httptest.Server) {
+func createTestServer(t *testing.T, clock clock.Clock, pid int, coordDir string) (chan struct{}, chan string, *Upgrader, *httptest.Server) {
+	requests := make(chan struct{})
+	responses := make(chan string)
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		l.Info("server got a request", "pid", pid)
 		// Let the test harness know a client is waiting on us
@@ -182,7 +311,7 @@ func createTestServer(t *testing.T, pid int, coordDir string, requests chan<- st
 		w.Write([]byte(resp))
 	}))
 
-	upg, err := newUpgrader(context.Background(), mockOS{pid: pid}, coordDir, WithLogger(l))
+	upg, err := newUpgrader(context.Background(), clock, mockOS{pid: pid}, coordDir, WithLogger(l))
 	if err != nil {
 		t.Fatalf("error creating upgrader: %v", err)
 	}
@@ -196,7 +325,7 @@ func createTestServer(t *testing.T, pid int, coordDir string, requests chan<- st
 	if err := upg.Ready(); err != nil {
 		t.Fatalf("unable to mark self as ready: %v", err)
 	}
-	return upg, server
+	return requests, responses, upg, server
 }
 
 func memoryOpenFile(name string) (*os.File, error) {
@@ -205,4 +334,8 @@ func memoryOpenFile(name string) (*os.File, error) {
 		panic(err)
 	}
 	return w, nil
+}
+
+type closeIdleTransport interface {
+	CloseIdleConnections()
 }

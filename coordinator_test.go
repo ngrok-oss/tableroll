@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/inconshreveable/log15"
+	"k8s.io/utils/clock"
 )
 
 // TestConnectOwner is a happy-path test of using the coordinator
@@ -19,8 +20,8 @@ func TestConnectOwner(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpdir)
 
-	coord1 := newCoordinator(mockOS{pid: 1}, l, tmpdir)
-	coord2 := newCoordinator(mockOS{pid: 2}, l, tmpdir)
+	coord1 := newCoordinator(clock.RealClock{}, mockOS{pid: 1}, l, tmpdir)
+	coord2 := newCoordinator(clock.RealClock{}, mockOS{pid: 2}, l, tmpdir)
 
 	coord1l, err := coord1.Listen(ctx)
 	if err != nil {
@@ -63,8 +64,8 @@ func TestLockCoordinationDirCtxCancel(t *testing.T) {
 		panic(err)
 	}
 	defer os.RemoveAll(tmpdir)
-	coord1 := newCoordinator(mockOS{pid: 1}, l, tmpdir)
-	coord2 := newCoordinator(mockOS{pid: 2}, l, tmpdir)
+	coord1 := newCoordinator(clock.RealClock{}, mockOS{pid: 1}, l, tmpdir)
+	coord2 := newCoordinator(clock.RealClock{}, mockOS{pid: 2}, l, tmpdir)
 	err = coord1.Lock(ctx)
 	if err != nil {
 		t.Fatalf("Error getting coordination dir: %v", err)
