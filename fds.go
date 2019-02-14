@@ -95,8 +95,12 @@ type fd struct {
 	Addr    string `json:"addr,omitEmpty"`
 }
 
-func (f *fd) associateFile(name string, file *os.File) {
-	f.file = newFile(file.Fd(), name)
+func (f *fd) associateFile(name string, osFile *os.File) {
+	f.file = &file{
+		osFile,
+		osFile.Fd(),
+	}
+	f.Name = name
 }
 
 func (f *fd) String() string {
