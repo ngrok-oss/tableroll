@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/inconshreveable/log15"
 )
@@ -23,6 +25,31 @@ func tmpDir() (string, func()) {
 	return dir, func() {
 		os.RemoveAll(dir)
 	}
+}
+
+// TestGCingUpgradeHandoff tests that the upgradehandoff test works even with
+// gc running more frequently.
+// This test exists because there was a point when `fd`s were owned by two file
+// objects, and one file being gc'd would break everything.
+func TestGCingUpgradeHandoff(t *testing.T) {
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			runtime.GC()
+			time.Sleep(10 * time.Nanosecond)
+		}
+	}()
+
+	for i := 0; i < 5; i++ {
+		time.Sleep(10 * time.Nanosecond)
+		TestUpgradeHandoff(t)
+	}
+	done <- struct{}{}
 }
 
 func TestUpgradeHandoff(t *testing.T) {
