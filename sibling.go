@@ -10,6 +10,7 @@ import (
 
 	fdsock "github.com/ftrvxmtrx/fd"
 	"github.com/inconshreveable/log15"
+	"github.com/pkg/errors"
 )
 
 type sibling struct {
@@ -90,12 +91,12 @@ func (c *sibling) writeFiles(fds []*fd) error {
 
 	// Finally, read ready byte and the handoff is done!
 	var b [1]byte
-	if n, _ := c.conn.Read(b[:]); n > 0 && b[0] == notifyReady {
+	if n, err := c.conn.Read(b[:]); n > 0 && b[0] == notifyReady {
 		c.l.Debug("our sibling sent us a ready")
 		c.readyC <- struct{}{}
 	} else {
-		c.l.Debug("our sibling failed to send us a ready")
-		return fmt.Errorf("sibling did not send us a ready byte: %v, %v", n, b)
+		c.l.Debug("our sibling failed to send us a ready", "err", err)
+		return errors.Wrapf(err, "sibling did not send us a ready byte: read %v bytes, %v", n, b)
 	}
 	return nil
 }

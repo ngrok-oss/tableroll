@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"sync"
 	"syscall"
 
 	fdsock "github.com/ftrvxmtrx/fd"
@@ -18,6 +19,7 @@ const (
 )
 
 type upgradeSession struct {
+	closeOnce   sync.Once
 	wr          *net.UnixConn
 	coordinator *coordinator
 	l           log15.Logger
@@ -151,10 +153,15 @@ func (s *upgradeSession) BecomeOwner() error {
 }
 
 func (s *upgradeSession) Close() error {
-	if s.wr != nil {
-		if err := s.wr.Close(); err != nil {
-			s.l.Warn("unable to close unix socket to owner", "err", err)
+	var err error
+	s.closeOnce.Do(func() {
+		if s.wr != nil {
+			err = s.wr.Close()
 		}
-	}
-	return s.coordinator.Unlock()
+		if coordErr := s.coordinator.Unlock(); coordErr != nil {
+			// unlock errors trump close errors arbitrarily
+			err = coordErr
+		}
+	})
+	return err
 }
