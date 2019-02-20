@@ -72,6 +72,13 @@ func (s *upgradeSession) getFiles(ctx context.Context) (map[string]*fd, error) {
 		select {
 		case <-functionEnd:
 		case <-ctx.Done():
+			// double check the function hasn't already returned, if it has then the
+			// session's out of our hands already.
+			select {
+			case <-functionEnd:
+				return
+			default:
+			}
 			// if there was a context error, close the socket to cause any pending reads/writes to fail
 			s.Close()
 		}

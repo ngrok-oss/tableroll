@@ -285,6 +285,33 @@ func TestFdPassMultipleTimes(t *testing.T) {
 	assertResp(t, s1.URL, c1, "msg3")
 }
 
+// TestUpgradeHandoffCloseCtx closes the 'New' context as soon as possible and
+// verifies that the context was only for instantiation.
+func TestUpgradeHandoffCloseCtx(t *testing.T) {
+	coordDir, cleanup := tmpDir()
+	defer cleanup()
+
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 1*time.Second)
+	upg1, err := newUpgrader(ctx1, clock.RealClock{}, mockOS{pid: 1}, coordDir, WithLogger(l))
+	if err != nil {
+		t.Fatalf("error creating upgrader: %v", err)
+	}
+	cancel1()
+	if err := upg1.Ready(); err != nil {
+		t.Fatalf("unable to mark self as ready: %v", err)
+	}
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	upg2, err := newUpgrader(ctx2, clock.RealClock{}, mockOS{pid: 2}, coordDir, WithLogger(l))
+	if err != nil {
+		t.Fatalf("error creating upgrader: %v", err)
+	}
+	cancel2()
+	if err := upg2.Ready(); err != nil {
+		t.Fatalf("unable to mark self as ready: %v", err)
+	}
+}
+
 func assertResp(t *testing.T, url string, c *http.Client, expected string) {
 	resp, err := c.Get(url)
 	if err != nil {
