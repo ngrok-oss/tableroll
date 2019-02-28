@@ -163,12 +163,9 @@ func (s *upgradeSession) Close() error {
 	var err error
 	s.closeOnce.Do(func() {
 		if s.wr != nil {
-			err = s.wr.Close()
+			s.wr.Close()
 		}
-		if coordErr := s.coordinator.Unlock(); coordErr != nil {
-			// unlock errors trump close errors arbitrarily
-			err = coordErr
-		}
+		err = s.coordinator.Unlock()
 	})
 	return err
 }
