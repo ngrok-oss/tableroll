@@ -253,8 +253,6 @@ func (u *Upgrader) UpgradeComplete() <-chan struct{} {
 
 // Stop prevents any more upgrades from happening, and closes
 // the upgrade complete channel.
-// It also closes any file descriptors in Fds which were inherited but are
-// unused.
 func (u *Upgrader) Stop() {
 	u.mustTransitionTo(upgraderStateStopped)
 	if u.session != nil {
@@ -270,7 +268,5 @@ func (u *Upgrader) Stop() {
 		default:
 			close(u.upgradeCompleteC)
 		}
-		u.l.Info("closing file descriptors")
-		u.Fds.closeFds()
 	})
 }
