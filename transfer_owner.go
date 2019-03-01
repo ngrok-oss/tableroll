@@ -6,11 +6,12 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"syscall"
 
-	fdsock "github.com/ftrvxmtrx/fd"
 	"github.com/inconshreveable/log15"
+	"github.com/opencontainers/runc/libcontainer/utils"
 	"github.com/pkg/errors"
 )
 
@@ -67,6 +68,11 @@ func (s *upgradeSession) getFiles(ctx context.Context) (map[string]*fd, error) {
 	if !s.hasOwner() {
 		s.l.Info("no connection present, no files from owner")
 		return nil, nil
+	}
+
+	sockFile, err := s.wr.File()
+	if err != nil {
+		return nil, errors.Wrapf(err, "could not convert sibling connection to file")
 	}
 
 	functionEnd := make(chan struct{})
@@ -129,9 +135,13 @@ func (s *upgradeSession) getFiles(ctx context.Context) (map[string]*fd, error) {
 		// it changes from the owner ith how I have this.
 		sockFileNames = append(sockFileNames, fd.String())
 	}
-	sockFiles, err := fdsock.Get(s.wr, len(sockFileNames), sockFileNames)
-	if err != nil {
-		return nil, orContextErr(errors.Wrap(err, "error getting file descriptors"))
+	sockFiles := make([]*os.File, 0, len(sockFileNames))
+	for i := 0; i < len(sockFileNames); i++ {
+		file, err := utils.RecvFd(sockFile)
+		if err != nil {
+			return nil, orContextErr(errors.Wrap(err, "error getting file descriptors"))
+		}
+		sockFiles = append(sockFiles, file)
 	}
 	if len(sockFiles) != len(fds) {
 		panic(errors.Errorf("got %v sockfiles, but expected %v: %+v; %+v", len(sockFiles), len(fds), sockFiles, fds))

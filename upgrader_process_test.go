@@ -199,6 +199,41 @@ func TestUnixMultiProcessUpgrade(t *testing.T) {
 	}
 }
 
+func TestMaxSocketUpg(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tmpdir, cleanup := tmpDir()
+	defer cleanup()
+
+	stdout, errC, exitC1 := runHelper(t, ctx, tmpdir, "maxSocketOpener")
+	select {
+	case msg := <-stdout:
+		if msg != MsgReady {
+			t.Fatalf("expected ready, got %q", msg)
+		}
+	case err := <-errC:
+		t.Fatalf("unexpected err: %v", err)
+	case exit := <-exitC1:
+		t.Fatalf("unexpected exit: %v", exit)
+	}
+
+	stdout, errC, exitC := runHelper(t, ctx, tmpdir, "maxSocketOpener")
+	select {
+	case msg := <-stdout:
+		if msg != MsgReady {
+			t.Fatalf("expected ready, got %q", msg)
+		}
+	case err := <-errC:
+		t.Fatalf("unexpected err: %v", err)
+	case exit := <-exitC:
+		t.Fatalf("unexpected exit: %v", exit)
+	}
+
+	cancel()
+	<-exitC1
+	<-exitC
+}
+
 func runHelper(t *testing.T, ctx context.Context, dir string, funcName string) (<-chan string, <-chan error, <-chan int) {
 	child := exec.CommandContext(ctx, os.Args[0], "-test.run=TestSpawnHelper", "--")
 	stderr, _ := child.StderrPipe()
@@ -225,7 +260,8 @@ func runHelper(t *testing.T, ctx context.Context, dir string, funcName string) (
 	go func() {
 		for stdoutScanner.Scan() {
 			text := strings.TrimSpace(stdoutScanner.Text())
-			if text != "" {
+			if text != "" && !strings.HasPrefix(text, "--- FAIL") {
+				// avoid sending '-test.run' metadata too
 				stdoutChan <- text
 			}
 		}
@@ -260,6 +296,8 @@ func TestSpawnHelper(t *testing.T) {
 		os.Exit(main1())
 	case "main2":
 		os.Exit(main2())
+	case "maxSocketOpener":
+		os.Exit(maxSocketOpener())
 	default:
 		fmt.Fprintf(os.Stderr, "unknown main function: %v", funcName)
 		os.Exit(1)
@@ -336,5 +374,51 @@ func main2() int {
 
 	<-upg.UpgradeComplete()
 	_ = ln.Close()
+	return 0
+}
+
+func maxSocketOpener() int {
+	ctx := context.Background()
+	tableRollDir := os.Getenv("TABLEROLL_DIR")
+
+	upg, err := New(ctx, tableRollDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v", err)
+		return 1
+	}
+
+	if err := upg.Ready(); err != nil {
+		fmt.Fprintf(os.Stderr, "%v", err)
+		return 1
+	}
+
+	// Assume we can always open at least 500, ulimits are usually around 1024
+	// and 500 is enough to catch the regression this is testing for.
+	minFds := 500
+	lns := []net.Listener{}
+	var i int
+	for i = 0; err == nil; i++ {
+		ln, err := upg.Fds.ListenWith(fmt.Sprintf("ln-%v", i), "tcp", "127.0.0.1:0", net.Listen)
+		if err != nil {
+			break
+		}
+		lns = append(lns, ln)
+	}
+	if i < minFds {
+		fmt.Fprintf(os.Stderr, "could not open %v fds, only opened %v: %v", minFds, i+1, err)
+		return 1
+	}
+
+	// Close the last 10 to free up enough fds for the upgrade to happen
+	lns, toClose := lns[0:len(lns)-10], lns[len(lns)-10:]
+	for _, ln := range toClose {
+		ln.Close()
+	}
+
+	fmt.Println(MsgReady)
+	<-upg.UpgradeComplete()
+	for _, ln := range lns {
+		ln.Close()
+	}
 	return 0
 }
