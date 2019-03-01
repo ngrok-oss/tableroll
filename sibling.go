@@ -8,8 +8,8 @@ import (
 	"net"
 	"os"
 
-	fdsock "github.com/ftrvxmtrx/fd"
 	"github.com/inconshreveable/log15"
+	"github.com/opencontainers/runc/libcontainer/utils"
 	"github.com/pkg/errors"
 )
 
@@ -50,6 +50,10 @@ func passFdsToSibling(l log15.Logger, conn *net.UnixConn, passedFiles map[string
 
 // writeFiles passes the list of files to the sibling.
 func (c *sibling) writeFiles(fds []*fd) error {
+	connFile, err := c.conn.File()
+	if err != nil {
+		return errors.Wrapf(err, "could not convert sibling connection to file")
+	}
 	validFds := make([]*fd, 0, len(fds))
 	rawFds := make([]*os.File, 0, len(fds))
 	for i := range fds {
@@ -83,10 +87,11 @@ func (c *sibling) writeFiles(fds []*fd) error {
 	if _, err := c.conn.Write(jsonBlob.Bytes()); err != nil {
 		return fmt.Errorf("could not write json to sibling: %v", err)
 	}
-
 	// Write all files it's expecting
-	if err := fdsock.Put(c.conn, rawFds...); err != nil {
-		return fmt.Errorf("could not write fds to sibling: %v", err)
+	for _, fi := range rawFds {
+		if err := utils.SendFd(connFile, fi.Name(), fi.Fd()); err != nil {
+			return fmt.Errorf("could not write fds to sibling: %v", err)
+		}
 	}
 
 	// Finally, read ready byte and the handoff is done!
