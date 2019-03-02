@@ -49,11 +49,18 @@ func TestFdsListener(t *testing.T) {
 	defer os.RemoveAll(temp)
 
 	socketPath := filepath.Join(temp, "socket")
+	socketPath2 := filepath.Join(temp, "socket2")
 	unix, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+	unix2, err := net.Listen("unix", socketPath2)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer unix.Close()
+	defer unix2.Close()
+	unix2.(*net.UnixListener).SetUnlinkOnClose(true)
 
 	parent := newFds(l, nil)
 	if _, err := parent.ListenWith("1", addr.Network(), addr.String(), func(_, _ string) (net.Listener, error) { return tcp, nil }); err != nil {
@@ -65,6 +72,11 @@ func TestFdsListener(t *testing.T) {
 		t.Fatal("Can't add listener:", err)
 	}
 	unix.Close()
+
+	if _, err := parent.ListenWith("3", "unix", socketPath, func(_, _ string) (net.Listener, error) { return unix2.(Listener), nil }); err != nil {
+		t.Fatal("Can't add listener:", err)
+	}
+	unix2.Close()
 
 	if _, err := os.Stat(socketPath); err != nil {
 		t.Error("Unix.Close() unlinked socketPath:", err)
@@ -81,8 +93,15 @@ func TestFdsListener(t *testing.T) {
 	ln.Close()
 
 	child.Remove("2")
-	if _, err := os.Stat(socketPath); err == nil {
-		t.Error("Remove() did not unlink socketPath")
+	if _, err := os.Stat(socketPath); err != nil {
+		t.Errorf("expected socket to still exist")
+	}
+
+	ln, err = child.Listener("3")
+	ln.(*net.UnixListener).SetUnlinkOnClose(true)
+	ln.Close()
+	if _, err := os.Stat(socketPath2); err == nil {
+		t.Errorf("expected socket should have been unlinked: %v", err)
 	}
 }
 
@@ -141,7 +160,6 @@ func TestFdsFile(t *testing.T) {
 
 func TestFdsLock(t *testing.T) {
 	fds := newFds(l, nil)
-	defer fds.closeFds()
 
 	ln, err := fds.ListenWith("1", "tcp", "127.0.0.1:0", net.Listen)
 	defer ln.Close()

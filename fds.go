@@ -213,6 +213,8 @@ func (f *Fds) Listen(ctx context.Context, id string, cfg *net.ListenConfig, netw
 // owner, or if it doesn't exist creates a new one using the provided function.
 // The listener function should return quickly since it will block any upgrade
 // requests from being serviced.
+// Note that any unix sockets will have "SetUnlinkOnClose(false)" called on
+// them. Callers may choose to switch them back to 'true' if appropriate.
 // The listener function is compatible with net.Listen.
 func (f *Fds) ListenWith(id, network, addr string, listenerFunc func(network, addr string) (net.Listener, error)) (net.Listener, error) {
 	f.mu.Lock()
@@ -417,7 +419,10 @@ func (f *Fds) Remove(id string) error {
 		return errors.Errorf("no element in map with id %v", id)
 	}
 	delete(f.fds, id)
-	return item.close()
+	if item.file != nil {
+		return item.file.Close()
+	}
+	return nil
 }
 
 func (f *Fds) fileLocked(id string) (*os.File, error) {
@@ -447,18 +452,6 @@ func (f *Fds) copy() map[string]*fd {
 	return files
 }
 
-func (f *fd) close() error {
-	if f.file == nil {
-		return nil
-	}
-	if f.Kind == fdKindListener && (f.Network == "unix" || f.Network == "unixpacket") {
-		// Remove inherited but unused Unix sockets from the file system.
-		// This undoes the effect of SetUnlinkOnClose(false).
-		_ = unlinkUnixSocket(f.Addr)
-	}
-	return f.file.Close()
-}
-
 func unlinkUnixSocket(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -470,17 +463,6 @@ func unlinkUnixSocket(path string) error {
 	}
 
 	return os.Remove(path)
-}
-
-func (f *Fds) closeFds() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	for _, file := range f.fds {
-		if err := file.file.Close(); err != nil {
-			f.l.Warn("error closing file", "file", file, "err", err)
-		}
-	}
 }
 
 func dupConn(conn syscall.Conn, name string) (*file, error) {
