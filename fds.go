@@ -404,7 +404,11 @@ func (f *Fds) File(id string) (*os.File, error) {
 func (f *Fds) Remove(id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.locked {
+
+	// It's unsafe to close a file descriptor during an upgrade, but it's safe to
+	// close it after an upgrade is complete, and it's necessary to do so to
+	// avoid leaking fds.
+	if f.locked && f.lockedReason == ErrUpgradeInProgress {
 		return f.lockedReason
 	}
 
