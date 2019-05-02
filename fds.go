@@ -10,6 +10,7 @@ import (
 
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
+	"golang.org/x/sys/unix"
 )
 
 var (
@@ -485,7 +486,7 @@ func dupConn(conn syscall.Conn, name string) (*file, error) {
 }
 
 func dupFd(fd uintptr, name string) (*file, error) {
-	dupfd, _, errno := syscall.Syscall(syscall.SYS_FCNTL, fd, syscall.F_DUPFD_CLOEXEC, 0)
+	dupfd, _, errno := unix.Syscall(unix.SYS_FCNTL, fd, unix.F_DUPFD_CLOEXEC, 0)
 	if errno != 0 {
 		return nil, errors.Wrap(errno, "can't dup fd using fcntl")
 	}
