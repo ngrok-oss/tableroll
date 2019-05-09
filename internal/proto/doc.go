@@ -20,13 +20,17 @@
 // O sends 'Message{Msg: V1MessageSteppingDown}' to N
 // O closes the connection
 //
-// There is one failure mode of interest here.
+// There are two failure modes of interest here.
 // 1. O sends 'SteppingDown' but 'N' doesn't read it.
+// 2. O gets an error sending 'SteppingDown' and is unsure if 'N' received it.
 //
 // In the case of 1. the failure mode is that there is now no owner. The
 // expected behavior is that 'N', if it fails to complete the handshake, will
 // return an error from 'Ready()' and exit, and will then restart and get
 // succeed since there will now be no owner.
+// In the case of 2, O must assume that the message sent successfully and
+// actually step down. This again leaves us with 0 owners in the failure mode,
+// which is what we want.
 // All other cases should result in O remaining the owner, or the ownership
 // transfer completing successfully.
 package proto

@@ -162,7 +162,12 @@ func (u *Upgrader) mustTransitionTo(state upgraderState) {
 }
 
 func (u *Upgrader) handleUpgradeRequest(conn *net.UnixConn) {
-	defer conn.Close()
+	defer func() {
+		if err := conn.Close(); err != nil {
+			u.l.Warn("error closing connection", "err", err)
+		}
+		u.l.Debug("closed upgrade socket connection")
+	}()
 
 	if err := u.transitionTo(upgraderStateTransferringOwnership); err != nil {
 		u.l.Info("cannot handle upgrade request", "reason", err)
@@ -172,12 +177,11 @@ func (u *Upgrader) handleUpgradeRequest(conn *net.UnixConn) {
 	u.l.Info("handling an upgrade request from peer")
 	u.Fds.lockMutations(ErrUpgradeInProgress)
 	// time to pass our FDs along
-	nextOwner, errC := passFdsToSibling(u.l, conn, u.Fds.copy())
+	conn.SetDeadline(u.clock.Now().Add(u.upgradeTimeout))
+	nextOwner := newSibling(u.l, conn)
 
-	readyTimeout := u.clock.NewTimer(u.upgradeTimeout)
-	defer readyTimeout.Stop()
-	select {
-	case err := <-errC:
+	err := nextOwner.giveFDs(u.Fds.copy())
+	if err != nil {
 		u.l.Error("failed to pass file descriptors to next owner", "reason", "error", "err", err)
 		// remain owner
 		if err := u.transitionTo(upgraderStateOwner); err != nil {
@@ -191,21 +195,15 @@ func (u *Upgrader) handleUpgradeRequest(conn *net.UnixConn) {
 			return
 		}
 		u.Fds.unlockMutations()
-	case <-readyTimeout.C():
-		u.l.Error("failed to pass file descriptors to next owner", "reason", "timeout")
-		if err := u.transitionTo(upgraderStateOwner); err != nil {
-			u.l.Error("unable to remain owner after upgrade timeout", "err", err)
-			return
-		}
-		u.Fds.unlockMutations()
-	case <-nextOwner.readyC:
-		u.l.Info("next owner is ready, marking ourselves as up for exit")
-		// ignore error, if we were 'Stopped' we can't transition, but we also
-		// don't care.
-		u.Fds.lockMutations(ErrUpgradeCompleted)
-		_ = u.transitionTo(upgraderStateDraining)
-		close(u.upgradeCompleteC)
+		return
 	}
+
+	u.l.Info("next owner is ready, marking ourselves as up for exit")
+	// ignore error, if we were 'Stopped' we can't transition, but we also
+	// don't care.
+	u.Fds.lockMutations(ErrUpgradeCompleted)
+	_ = u.transitionTo(upgraderStateDraining)
+	close(u.upgradeCompleteC)
 }
 
 // Ready signals that the current process is ready to accept connections.
@@ -230,7 +228,7 @@ func (u *Upgrader) Ready() error {
 	}()
 	if u.session.hasOwner() {
 		// We have to notify the owner we're ready if they exist.
-		if err := u.session.sendReady(); err != nil {
+		if err := u.session.readyHandshake(); err != nil {
 			return err
 		}
 	}

@@ -1,9 +1,9 @@
 package proto
 
 const (
-	// ProtoVersion is the latest version of the protocol. It is implicitly 0 for
+	// Version is the latest version of the protocol. It is implicitly 0 for
 	// clients that didn't yet have a protocol version
-	ProtoVersion = 1
+	Version = 1
 	// V0NotifyReady is the value sent at the end in the v0 protocol to indicate
 	// readyness
 	V0NotifyReady = 42

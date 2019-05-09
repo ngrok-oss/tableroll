@@ -2,6 +2,11 @@ package proto
 
 import "fmt"
 
+// This file implements a way to encode and decode a uint32 as json-ignorable
+// whitespace. Since JSON allows 4 whitespace characters that will be ignored,
+// we can encode 2 bits per whitespace character. This file implements that
+// encoding.
+
 // encodeVersion encodes a given uint32 as a json-ignorable sequence of whitespace
 func encodeVersion(version uint32) []byte {
 	result := []byte{}

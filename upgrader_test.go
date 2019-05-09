@@ -225,6 +225,7 @@ func TestPIDReuse(t *testing.T) {
 // the same listening fds to multiple processes if a 'Ready' is not received in
 // time.
 func TestFdPassMultipleTimes(t *testing.T) {
+	t.Skip("TODO")
 	ctx := context.Background()
 	clock := fakeclock.NewFakeClock(time.Now())
 	coordDir, cleanup := tmpDir()
@@ -309,6 +310,32 @@ func TestUpgradeHandoffCloseCtx(t *testing.T) {
 	cancel2()
 	if err := upg2.Ready(); err != nil {
 		t.Fatalf("unable to mark self as ready: %v", err)
+	}
+}
+
+func TestUpgradeTimeout(t *testing.T) {
+	ctx := context.Background()
+	clock := fakeclock.NewFakeClock(time.Now())
+	coordDir, cleanup := tmpDir()
+	defer cleanup()
+
+	// If upg1 times out serving the upgrade, upg2 should not be able to think it's the owner
+	upg1, err := newUpgrader(ctx, clock, mockOS{pid: 1}, coordDir, WithLogger(l.New("pid", "1")), WithUpgradeTimeout(30*time.Millisecond))
+	if err != nil {
+		t.Fatalf("error creating upgrader: %v", err)
+	}
+	if err := upg1.Ready(); err != nil {
+		t.Fatalf("unable to mark self as ready: %v", err)
+	}
+
+	upg2, err := newUpgrader(ctx, clock, mockOS{pid: 2}, coordDir, WithLogger(l.New("pid", "2")))
+	if err != nil {
+		t.Fatalf("error creating upgrader: %v", err)
+	}
+	// upg1 serve timeout
+	time.Sleep(60 * time.Millisecond)
+	if err := upg2.Ready(); err == nil {
+		t.Fatalf("should not be able to mark as ready after parent timed out")
 	}
 }
 
