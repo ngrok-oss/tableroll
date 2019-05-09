@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"time"
 
 	"github.com/inconshreveable/log15"
 	"github.com/ngrok/tableroll/internal/proto"
@@ -31,7 +32,7 @@ func (s *sibling) String() string {
 // passFdsToSibling passes all this processes file descriptors to a sibling
 // over the provided unix connection.  It returns an error channel which will,
 // at most, have one error written to it.
-func (s *sibling) giveFDs(passedFiles map[string]*fd) error {
+func (s *sibling) giveFDs(readyTimeoutC <-chan time.Time, passedFiles map[string]*fd) error {
 	fds := make([]*fd, 0, len(passedFiles))
 	for _, fd := range passedFiles {
 		fds = append(fds, fd)
@@ -42,6 +43,26 @@ func (s *sibling) giveFDs(passedFiles map[string]*fd) error {
 		return errors.Wrapf(err, "could not convert sibling connection to file")
 	}
 	defer connFile.Close()
+
+	functionEnd := make(chan struct{})
+	defer close(functionEnd)
+	go func() {
+		select {
+		case <-functionEnd:
+		case <-readyTimeoutC:
+			select {
+			case <-functionEnd:
+			default:
+				s.l.Info("timed out, closing file and connection")
+				// fail reads/writes on timeout
+				s.conn.Close()
+				// Note: it's possible to hit a data-race between this Close and the
+				// '.Fd' call within 'utils.SendFd'
+				// I don't know if it's possible to fix this race :(
+				connFile.Close()
+			}
+		}
+	}()
 
 	validFds := make([]*fd, 0, len(fds))
 	rawFds := make([]*os.File, 0, len(fds))

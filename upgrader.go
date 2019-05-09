@@ -176,11 +176,11 @@ func (u *Upgrader) handleUpgradeRequest(conn *net.UnixConn) {
 
 	u.l.Info("handling an upgrade request from peer")
 	u.Fds.lockMutations(ErrUpgradeInProgress)
-	// time to pass our FDs along
-	conn.SetDeadline(u.clock.Now().Add(u.upgradeTimeout))
-	nextOwner := newSibling(u.l, conn)
 
-	err := nextOwner.giveFDs(u.Fds.copy())
+	readyTimeout := u.clock.NewTimer(u.upgradeTimeout)
+	defer readyTimeout.Stop()
+	nextOwner := newSibling(u.l, conn)
+	err := nextOwner.giveFDs(readyTimeout.C(), u.Fds.copy())
 	if err != nil {
 		u.l.Error("failed to pass file descriptors to next owner", "reason", "error", "err", err)
 		// remain owner
