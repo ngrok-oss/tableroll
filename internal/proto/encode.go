@@ -29,9 +29,6 @@ func WriteVersionedJSONBlob(dst io.Writer, obj interface{}, version uint32) erro
 	if err := binary.Write(&jsonBlobLenBuf, binary.BigEndian, int32(jsonBlob.Len())); err != nil {
 		panic(fmt.Errorf("could not binary encode an int32: %v", err))
 	}
-	if jsonBlobLenBuf.Len() != 4 {
-		panic(fmt.Errorf("int32 should be 4 bytes, not: %+v", jsonBlobLenBuf))
-	}
 
 	// Length-prefixed json blob
 	if _, err := dst.Write(jsonBlobLenBuf.Bytes()); err != nil {
