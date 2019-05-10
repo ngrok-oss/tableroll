@@ -48,7 +48,7 @@ func encodeCrumb(crumb byte) byte {
 	case 3:
 		return '\n'
 	}
-	panic(fmt.Sprintf("byePair was not actually a pair of bytes: %x", crumb))
+	panic(fmt.Sprintf("crumb was not actually a pair of bytes: %x", crumb))
 }
 
 // decodeCrumb is the inverse operation of encodeCrumb.
@@ -63,7 +63,7 @@ func decodeCrumb(char byte) (byte, error) {
 	case '\n':
 		return 3, nil
 	}
-	return 0, fmt.Errorf("char was not a whitespace encoding of a bytepair: %x", char)
+	return 0, fmt.Errorf("char was not a whitespace encoding of a crumb: %x", char)
 }
 
 func isJSONIgnorableWhitespace(char byte) bool {
