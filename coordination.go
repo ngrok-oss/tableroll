@@ -158,6 +158,7 @@ func (c *coordinator) ConnectOwner(ctx context.Context) (*net.UnixConn, error) {
 		c.l.Warn("found living pid in coordination dir, but it wasn't listening for us", "pid", ppid, "dialErr", err)
 		return nil, errNoOwner
 	}
+
 	return conn.(*net.UnixConn), nil
 }
 

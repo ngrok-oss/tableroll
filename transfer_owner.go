@@ -2,28 +2,24 @@ package tableroll
 
 import (
 	"context"
-	"encoding/binary"
-	"encoding/json"
-	"io"
+	"fmt"
 	"net"
 	"os"
 	"sync"
 	"syscall"
 
 	"github.com/inconshreveable/log15"
+	"github.com/ngrok/tableroll/internal/proto"
 	"github.com/opencontainers/runc/libcontainer/utils"
 	"github.com/pkg/errors"
 )
 
-const (
-	notifyReady = 42
-)
-
 type upgradeSession struct {
-	closeOnce   sync.Once
-	wr          *net.UnixConn
-	coordinator *coordinator
-	l           log15.Logger
+	closeOnce    sync.Once
+	wr           *net.UnixConn
+	coordinator  *coordinator
+	ownerVersion uint32
+	l            log15.Logger
 }
 
 func pidIsDead(osi osIface, pid int) bool {
@@ -74,6 +70,7 @@ func (s *upgradeSession) getFiles(ctx context.Context) (map[string]*fd, error) {
 	if err != nil {
 		return nil, errors.Wrapf(err, "could not convert sibling connection to file")
 	}
+	defer sockFile.Close()
 
 	functionEnd := make(chan struct{})
 	go func() {
@@ -103,27 +100,14 @@ func (s *upgradeSession) getFiles(ctx context.Context) (map[string]*fd, error) {
 		return err
 	}
 
-	// First get the metadata for fds to expect. This also lets us know how many FDs to get
 	fds := []*fd{}
+	version, err := proto.ReadVersionedJSONBlob(s.wr, &fds)
+	if err != nil {
+		return nil, orContextErr(errors.Wrap(err, "can't read fd metadata from owner process"))
+	}
+	s.ownerVersion = version
 
-	// Note: use length-prefixing and avoid decoding directly from the socket to
-	// ensure the reader isn't put into buffered mode, at which point file
-	// descriptors can get lost since go's io buffering is obviously not fd
-	// aware.
-	var metaJSONLength int32
-	if err := binary.Read(s.wr, binary.BigEndian, &metaJSONLength); err != nil {
-		return nil, orContextErr(errors.Wrap(err, "protocol error: could not read length of json"))
-	}
-	metaJSON := make([]byte, metaJSONLength)
-	if n, err := io.ReadFull(s.wr, metaJSON); err != nil || n != int(metaJSONLength) {
-		return nil, orContextErr(errors.Wrapf(err, "unable to read expected meta json length (expected %v, got (%v, %v))", metaJSONLength, n, err))
-	}
-
-	if err := json.Unmarshal(metaJSON, &fds); err != nil {
-		return nil, orContextErr(errors.Wrap(err, "can't decode names from owner process"))
-	}
 	s.l.Debug("expecting files", "fds", fds)
-
 	// Now grab all the FDs from the owner from the socket
 	files := make(map[string]*fd, len(fds))
 	sockFileNames := make([]string, 0, len(fds))
@@ -156,12 +140,51 @@ func (s *upgradeSession) getFiles(ctx context.Context) (map[string]*fd, error) {
 	return files, nil
 }
 
-func (s *upgradeSession) sendReady() error {
+func (s *upgradeSession) readyHandshake() error {
 	defer s.wr.Close()
-	if _, err := s.wr.Write([]byte{notifyReady}); err != nil {
+	if s.ownerVersion == 0 {
+		s.l.Info("performing v0 ready handshake")
+		if _, err := s.wr.Write([]byte{proto.V0NotifyReady}); err != nil {
+			return errors.Wrap(err, "can't notify owner process")
+		}
+		s.l.Info("notified the owner process we're ready")
+		return nil
+	}
+	s.l.Info("performing v1 ready handshake")
+	// The owner we're taking over from indicated it speaks v1+ of the file
+	// descriptor handoff protocol.
+	// That means we can do a proper handshake rather than writing and forgetting.
+	// Due to the fact that the unix socket we're using is a stream socket, not a
+	// datagram socket, the fact that we write a ready value doesn't actually
+	// mean the owner has read it yet.
+	// We need to wait for an ack so we know our owner read it before we consider
+	// ourselves the new owner.
+	// First write a v1 start ready handshake byte. This is because the owner
+	// told us it can speak v1+, but we haven't indicated our verison yet, so it
+	// has to read a byte at the beginning just in case we're v0.
+	// Write a byte that indicates to it we're v1+, and then write proper version
+	// information.
+	if _, err := s.wr.Write([]byte{proto.V1StartReadyHandshake}); err != nil {
 		return errors.Wrap(err, "can't notify owner process")
 	}
-	s.l.Info("notified the owner process we're ready")
+	// now write our explicit version information so it knows to perform a v1
+	// handshake
+	if err := proto.WriteJSONBlob(s.wr, proto.VersionInformation{
+		Version: proto.Version,
+	}); err != nil {
+		return err
+	}
+	// Now they know we're v1, they'll ack that we wrote the version with a
+	// 'SteppingDown' response
+	var obj proto.Message
+	err := proto.ReadJSONBlob(s.wr, &obj)
+	if err != nil {
+		return err
+	}
+	if obj.Msg != proto.V1MessageSteppingDown {
+		return fmt.Errorf("expected stepping down message, got %v", obj.Msg)
+	}
+	// at this point they acked us, we can become the owner safely.
 	return nil
 }
 

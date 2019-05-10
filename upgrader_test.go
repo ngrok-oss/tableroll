@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	v1tableroll "github.com/euank/tableroll/v1_0_0"
 	"github.com/inconshreveable/log15"
 	"k8s.io/utils/clock"
 	fakeclock "k8s.io/utils/clock/testing"
@@ -296,6 +297,7 @@ func TestUpgradeHandoffCloseCtx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error creating upgrader: %v", err)
 	}
+	defer upg1.Stop()
 	cancel1()
 	if err := upg1.Ready(); err != nil {
 		t.Fatalf("unable to mark self as ready: %v", err)
@@ -306,10 +308,116 @@ func TestUpgradeHandoffCloseCtx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error creating upgrader: %v", err)
 	}
+	defer upg2.Stop()
 	cancel2()
 	if err := upg2.Ready(); err != nil {
 		t.Fatalf("unable to mark self as ready: %v", err)
 	}
+}
+
+func TestUpgradeTimeout(t *testing.T) {
+	ctx := context.Background()
+	clock := fakeclock.NewFakeClock(time.Now())
+	coordDir, cleanup := tmpDir()
+	defer cleanup()
+
+	// If upg1 times out serving the upgrade, upg2 should not be able to think it's the owner
+	upg1, err := newUpgrader(ctx, clock, mockOS{pid: 1}, coordDir, WithLogger(l.New("pid", "1")), WithUpgradeTimeout(30*time.Millisecond))
+	if err != nil {
+		t.Fatalf("error creating upgrader: %v", err)
+	}
+	if err := upg1.Ready(); err != nil {
+		t.Fatalf("unable to mark self as ready: %v", err)
+	}
+
+	upg2, err := newUpgrader(ctx, clock, mockOS{pid: 2}, coordDir, WithLogger(l.New("pid", "2")))
+	if err != nil {
+		t.Fatalf("error creating upgrader: %v", err)
+	}
+	// upg1 serve timeout
+	for !clock.HasWaiters() {
+		time.Sleep(1 * time.Millisecond)
+	}
+	clock.Step(40 * time.Millisecond)
+	// Hack: we need to wait for upg2 to actually close the connection/file as
+	// part of the timeout, so wait a sec to make sure they're closed...
+	// A more proper fix would be to let us instrument the upgrader with a
+	// callback or upgrade failure channel so we can explicitly wait for the timeout here.
+	time.Sleep(10 * time.Millisecond)
+	if err := upg2.Ready(); err == nil {
+		t.Fatalf("should not be able to mark as ready after parent timed out")
+	}
+}
+
+// TestUpgradeV0ToUs is basically TestUpgradeHandoff, but with the old server
+// being a v1 tableroll.
+func TestUpgradeV0ToUs(t *testing.T) {
+	ctx := context.Background()
+	coordDir, cleanup := tmpDir()
+	defer cleanup()
+
+	// Copy createTestServer into this function because the v1tableroll and
+	// tableroll packages have different types, e.g. for options and upg1.Fds, so
+	// the old function can't be made generic trivially by passing in a
+	// constructor or such.
+	upg1, err := v1tableroll.New(ctx, coordDir, v1tableroll.WithLogger(l.New("pid", "1")), v1tableroll.WithUpgradeTimeout(30*time.Millisecond))
+	if err != nil {
+		t.Fatalf("error creating upgrader: %v", err)
+	}
+	defer upg1.Stop()
+	requests1 := make(chan struct{})
+	responses1 := make(chan string)
+	s1 := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests1 <- struct{}{}
+		resp := <-responses1
+		w.Write([]byte(resp))
+	}))
+	defer s1.Close()
+	listen, err := upg1.Fds.Listen(context.Background(), "testListen", nil, "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("unable to listen: %v", err)
+	}
+	s1.Listener = listen
+	s1.Start()
+	if err := upg1.Ready(); err != nil {
+		t.Fatalf("unable to mark self as ready: %v", err)
+	}
+	c1 := s1.Client()
+	c1t := c1.Transport.(closeIdleTransport)
+
+	go func() {
+		<-requests1
+		responses1 <- "msg1"
+	}()
+	assertResp(t, s1.URL, c1, "msg1")
+	// s1 is listening
+
+	// leave a hanging client connection for s1 before upgrading, then read it after upgrading
+	msg2Response := make(chan struct{})
+	go func() {
+		assertResp(t, s1.URL, c1, "msg2")
+		msg2Response <- struct{}{}
+	}()
+	<-requests1
+
+	// now have s2 take over for s1
+	server2Reqs, server2Msgs, upg2, s2 := createTestServer(t, clock.RealClock{}, 2, coordDir)
+	defer upg2.Stop()
+	defer s2.Close()
+	<-upg1.UpgradeComplete()
+	s1.Listener.Close()
+	// make sure the existing tcp connections aren't re-used anymore
+	c1t.CloseIdleConnections()
+	go func() {
+		<-server2Reqs
+		server2Msgs <- "msg3"
+	}()
+	// Using the client for s1 should work for s2 now since the listener was passed along
+	assertResp(t, s1.URL, c1, "msg3")
+
+	// Hanging server1 request should still be service-able even after s2 has taken over
+	responses1 <- "msg2"
+	<-msg2Response
 }
 
 func assertResp(t *testing.T, url string, c *http.Client, expected string) {
