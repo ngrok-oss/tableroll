@@ -237,10 +237,14 @@ func (f *Fds) ListenWith(id, network, addr string, listenerFunc func(network, ad
 		return nil, err
 	}
 	if _, ok := ln.(Listener); !ok {
+		ln.Close()
 		return nil, errors.Errorf("%T doesn't implement tableroll.Listener", ln)
 	}
-	err = f.addListenerLocked(id, network, addr, ln.(Listener))
-	return ln, err
+	if err := f.addListenerLocked(id, network, addr, ln.(Listener)); err != nil {
+		ln.Close()
+		return nil, err
+	}
+	return ln, nil
 }
 
 // Listener returns an inherited listener with the given ID, or nil.
