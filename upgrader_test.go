@@ -347,9 +347,9 @@ func TestUpgradeV0ToUs(t *testing.T) {
 	defer cleanup()
 
 	// Copy createTestServer into this function because the v1tableroll and
-	// tableroll have different types, e.g. for options and upg1.Fds, so the old
-	// function can't be made generic trivially by passing in a constructor or
-	// such.
+	// tableroll packages have different types, e.g. for options and upg1.Fds, so
+	// the old function can't be made generic trivially by passing in a
+	// constructor or such.
 	upg1, err := v1tableroll.New(ctx, coordDir, v1tableroll.WithLogger(l.New("pid", "1")), v1tableroll.WithUpgradeTimeout(30*time.Millisecond))
 	if err != nil {
 		t.Fatalf("error creating upgrader: %v", err)
