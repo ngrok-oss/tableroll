@@ -20,8 +20,7 @@ func WriteVersionedJSONBlob(dst io.Writer, obj interface{}, version uint32) erro
 
 	var jsonBlob bytes.Buffer
 	jsonBlob.Write(versionPrefix)
-	enc := json.NewEncoder(&jsonBlob)
-	if err := enc.Encode(obj); err != nil {
+	if err := json.NewEncoder(&jsonBlob).Encode(obj); err != nil {
 		return err
 	}
 
@@ -54,7 +53,7 @@ func ReadVersionedJSONBlob(src io.Reader, obj interface{}) (uint32, error) {
 		return 0, errors.Wrap(err, "protocol error: could not read length of json")
 	}
 
-	// don't decode directly from src, but rathre go through a buffer, because
+	// don't decode directly from src, but rather go through a buffer, because
 	// `json.Decode` will attempt to use a buffered reader which can accidentally
 	// lose fd's being sent across a socket.
 	data := make([]byte, jsonLen)
