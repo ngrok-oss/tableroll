@@ -297,6 +297,7 @@ func TestUpgradeHandoffCloseCtx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error creating upgrader: %v", err)
 	}
+	defer upg1.Stop()
 	cancel1()
 	if err := upg1.Ready(); err != nil {
 		t.Fatalf("unable to mark self as ready: %v", err)
@@ -307,6 +308,7 @@ func TestUpgradeHandoffCloseCtx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error creating upgrader: %v", err)
 	}
+	defer upg2.Stop()
 	cancel2()
 	if err := upg2.Ready(); err != nil {
 		t.Fatalf("unable to mark self as ready: %v", err)
@@ -333,7 +335,15 @@ func TestUpgradeTimeout(t *testing.T) {
 		t.Fatalf("error creating upgrader: %v", err)
 	}
 	// upg1 serve timeout
+	for !clock.HasWaiters() {
+		time.Sleep(1 * time.Millisecond)
+	}
 	clock.Step(40 * time.Millisecond)
+	// Hack: we need to wait for upg2 to actually close the connection/file as
+	// part of the timeout, so wait a sec to make sure they're closed...
+	// A more proper fix would be to let us instrument the upgrader with a
+	// callback or upgrade failure channel so we can explicitly wait for the timeout here.
+	time.Sleep(10 * time.Millisecond)
 	if err := upg2.Ready(); err == nil {
 		t.Fatalf("should not be able to mark as ready after parent timed out")
 	}
