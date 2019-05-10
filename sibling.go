@@ -30,8 +30,10 @@ func (s *sibling) String() string {
 }
 
 // passFdsToSibling passes all this processes file descriptors to a sibling
-// over the provided unix connection.  It returns an error channel which will,
-// at most, have one error written to it.
+// over the provided unix connection.  It returns an error if it was unable to
+// pass all file descriptors along, or if the receiver did not signal that they were received.
+// This method also waits for the new process to signal that it intends to take
+// over ownership of those file descriptors.
 func (s *sibling) giveFDs(readyTimeoutC <-chan time.Time, passedFiles map[string]*fd) error {
 	fds := make([]*fd, 0, len(passedFiles))
 	for _, fd := range passedFiles {

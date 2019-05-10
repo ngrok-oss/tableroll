@@ -13,6 +13,7 @@ func TestVersionEncodeDecode(t *testing.T) {
 		if unique[string(val)] {
 			t.Errorf("version %v did not uniquely encode", i)
 		}
+		unique[string(val)] = true
 		decoded, err := decodeVersion(val)
 		if err != nil {
 			t.Fatalf("decode error: %v", err)
