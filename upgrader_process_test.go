@@ -21,7 +21,15 @@ const (
 	MsgServedRequest = "served-request"
 )
 
-const testAddr = "127.0.0.1:44090"
+// loopbackAddr finds a free ephemeral loopback address and returns it
+func loopbackTCPAddr(t *testing.T) string {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("could not listen: %v", err)
+	}
+	defer ln.Close()
+	return ln.Addr().String()
+}
 
 func TestBasicProcessUpgrade(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -29,7 +37,10 @@ func TestBasicProcessUpgrade(t *testing.T) {
 	tmpdir, cleanup := tmpDir()
 	defer cleanup()
 
-	stdout, errC, exitC := runHelper(t, ctx, tmpdir, "main1")
+	testAddr := loopbackTCPAddr(t)
+	t.Logf("running with addr %v", testAddr)
+
+	stdout, errC, exitC := runHelper(t, ctx, tmpdir, "main1", testAddr)
 
 	select {
 	case msg := <-stdout:
@@ -50,7 +61,7 @@ func TestBasicProcessUpgrade(t *testing.T) {
 	}
 	_, err := client.Get("http://" + testAddr)
 	if err != nil {
-		t.Fatalf("expected no error in get")
+		t.Fatalf("expected no error in get: %v", err)
 	}
 	// server1 should have got the request
 	select {
@@ -65,7 +76,7 @@ func TestBasicProcessUpgrade(t *testing.T) {
 	}
 
 	// Now pass fds to process 2
-	stdout2, errC2, exitC2 := runHelper(t, ctx, tmpdir, "main1")
+	stdout2, errC2, exitC2 := runHelper(t, ctx, tmpdir, "main1", testAddr)
 
 	// process 1 should exit
 	select {
@@ -77,6 +88,8 @@ func TestBasicProcessUpgrade(t *testing.T) {
 		if exit != 0 {
 			t.Fatalf("expected 0 exit: %v", exit)
 		}
+	case err := <-errC2:
+		t.Fatalf("unexpected err from process 2: %v", err)
 	}
 
 	// process 2 should be ready
@@ -85,8 +98,10 @@ func TestBasicProcessUpgrade(t *testing.T) {
 		if msg != MsgReady {
 			t.Fatalf("expected ready, got %v", msg)
 		}
+	case err := <-errC:
+		t.Fatalf("unexpected err from process 1: %v", err)
 	case err := <-errC2:
-		t.Fatalf("unexpected err: %v", err)
+		t.Fatalf("unexpected err from process 2: %v", err)
 	case exit := <-exitC2:
 		t.Fatalf("unexpected exit: %v", exit)
 	}
@@ -102,8 +117,10 @@ func TestBasicProcessUpgrade(t *testing.T) {
 		if msg != MsgServedRequest {
 			t.Fatalf("expected served request, got %q", msg)
 		}
+	case err := <-errC:
+		t.Fatalf("unexpected err from process 1: %v", err)
 	case err := <-errC2:
-		t.Fatalf("unexpected err: %v", err)
+		t.Fatalf("unexpected err from process 2: %v", err)
 	case exit := <-exitC2:
 		t.Fatalf("unexpected exit: %v", exit)
 	}
@@ -116,7 +133,7 @@ func TestUnixMultiProcessUpgrade(t *testing.T) {
 	defer cleanup()
 
 	sock := filepath.Join(tmpdir, "testsock")
-	stdout, errC, exitC := runHelper(t, ctx, tmpdir, "main2")
+	stdout, errC, exitC := runHelper(t, ctx, tmpdir, "main2", "")
 
 	select {
 	case msg := <-stdout:
@@ -154,7 +171,7 @@ func TestUnixMultiProcessUpgrade(t *testing.T) {
 	// now pass fds through 10 more processes
 	for i := 0; i < 10; i++ {
 		// Now pass fds to process n
-		stdoutn, errCn, exitCn := runHelper(t, ctx, tmpdir, "main2")
+		stdoutn, errCn, exitCn := runHelper(t, ctx, tmpdir, "main2", "")
 
 		// process n-1 should exit
 		exit := <-prevExit
@@ -205,7 +222,7 @@ func TestMaxSocketUpg(t *testing.T) {
 	tmpdir, cleanup := tmpDir()
 	defer cleanup()
 
-	stdout, errC, exitC1 := runHelper(t, ctx, tmpdir, "maxSocketOpener")
+	stdout, errC, exitC1 := runHelper(t, ctx, tmpdir, "maxSocketOpener", "")
 	select {
 	case msg := <-stdout:
 		if msg != MsgReady {
@@ -217,7 +234,7 @@ func TestMaxSocketUpg(t *testing.T) {
 		t.Fatalf("unexpected exit: %v", exit)
 	}
 
-	stdout, errC, exitC := runHelper(t, ctx, tmpdir, "maxSocketOpener")
+	stdout, errC, exitC := runHelper(t, ctx, tmpdir, "maxSocketOpener", "")
 	select {
 	case msg := <-stdout:
 		if msg != MsgReady {
@@ -234,7 +251,12 @@ func TestMaxSocketUpg(t *testing.T) {
 	<-exitC
 }
 
-func runHelper(t *testing.T, ctx context.Context, dir string, funcName string) (<-chan string, <-chan error, <-chan int) {
+// runHelper runs one of several "main" functions built into this testing
+// binary.
+// These are used to allow integration style testing of multiple processes.
+// This function takes a tableroll directory and function name to execute, and
+// optionally a tcp address to listen on which is used by certain tests.
+func runHelper(t *testing.T, ctx context.Context, dir string, funcName string, addr string) (<-chan string, <-chan error, <-chan int) {
 	child := exec.CommandContext(ctx, os.Args[0], "-test.run=TestSpawnHelper", "--")
 	stderr, _ := child.StderrPipe()
 	stdout, _ := child.StdoutPipe()
@@ -250,6 +272,7 @@ func runHelper(t *testing.T, ctx context.Context, dir string, funcName string) (
 		"MAIN_FUNC=" + funcName,
 		"__TABLEROLL_TEST_PROCESS=1",
 		"TABLEROLL_DIR=" + dir,
+		"LISTEN_ADDR=" + addr,
 	}...)
 
 	stdoutChan := make(chan string, 1)
@@ -307,13 +330,14 @@ func TestSpawnHelper(t *testing.T) {
 func main1() int {
 	ctx := context.Background()
 	tableRollDir := os.Getenv("TABLEROLL_DIR")
+	listenAddr := os.Getenv("LISTEN_ADDR")
 
 	upg, err := New(ctx, tableRollDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v", err)
 		return 1
 	}
-	ln, err := upg.Fds.Listen(ctx, "127.0.0.1:44090", nil, "tcp", "127.0.0.1:44090")
+	ln, err := upg.Fds.Listen(ctx, listenAddr, nil, "tcp", listenAddr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v", err)
 		return 1
