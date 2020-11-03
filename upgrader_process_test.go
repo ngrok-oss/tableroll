@@ -88,6 +88,8 @@ func TestBasicProcessUpgrade(t *testing.T) {
 		if exit != 0 {
 			t.Fatalf("expected 0 exit: %v", exit)
 		}
+	case err := <-errC2:
+		t.Fatalf("unexpected err from process 2: %v", err)
 	}
 
 	// process 2 should be ready
@@ -96,8 +98,10 @@ func TestBasicProcessUpgrade(t *testing.T) {
 		if msg != MsgReady {
 			t.Fatalf("expected ready, got %v", msg)
 		}
+	case err := <-errC:
+		t.Fatalf("unexpected err from process 1: %v", err)
 	case err := <-errC2:
-		t.Fatalf("unexpected err: %v", err)
+		t.Fatalf("unexpected err from process 2: %v", err)
 	case exit := <-exitC2:
 		t.Fatalf("unexpected exit: %v", exit)
 	}
@@ -113,8 +117,10 @@ func TestBasicProcessUpgrade(t *testing.T) {
 		if msg != MsgServedRequest {
 			t.Fatalf("expected served request, got %q", msg)
 		}
+	case err := <-errC:
+		t.Fatalf("unexpected err from process 1: %v", err)
 	case err := <-errC2:
-		t.Fatalf("unexpected err: %v", err)
+		t.Fatalf("unexpected err from process 2: %v", err)
 	case exit := <-exitC2:
 		t.Fatalf("unexpected exit: %v", exit)
 	}

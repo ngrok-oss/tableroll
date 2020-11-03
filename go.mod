@@ -6,7 +6,7 @@ require (
 	github.com/opencontainers/runc v0.0.0-00010101000000-000000000000
 	github.com/pkg/errors v0.8.1
 	github.com/rkt/rkt v1.30.0
-	golang.org/x/sys v0.0.0-20190124100055-b90733256f2e
+	golang.org/x/sys v0.0.0-20201101102859-da207088b7d1
 	k8s.io/utils v0.0.0-20190221042446-c2654d5206da
 )
 
