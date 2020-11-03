@@ -117,6 +117,7 @@ func (s *upgradeSession) getFiles(ctx context.Context) (map[string]*fd, error) {
 	for i := 0; i < len(sockFileNames); i++ {
 		file, err := utils.RecvFd(sockFile)
 		if err != nil {
+			s.l.Error("error receiving a file descriptor", "err", err)
 			return nil, orContextErr(errors.Wrap(err, "error getting file descriptors"))
 		}
 		sockFiles = append(sockFiles, file)

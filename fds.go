@@ -182,7 +182,7 @@ func (f *Fds) Listen(ctx context.Context, id string, cfg *net.ListenConfig, netw
 		return nil, err
 	}
 	if ln != nil {
-		f.l.Debug("found existing listener in store", "network", network, "addr", addr)
+		f.l.Debug("found existing listener in store", "listenerId", id, "network", network, "addr", addr)
 		return ln, nil
 	}
 
