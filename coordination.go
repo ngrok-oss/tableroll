@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/euank/filelock"
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
-	"github.com/rkt/rkt/pkg/lock"
 	"k8s.io/utils/clock"
 )
 
@@ -27,7 +27,7 @@ var errNoOwner = errors.New("no owner process exists")
 // between a read and update.
 // It is implemented in this case with unix locks on a file.
 type coordinator struct {
-	lock *lock.FileLock
+	lock *filelock.FileLock
 	dir  string
 	id   string
 	l    log15.Logger
@@ -66,7 +66,7 @@ func (c *coordinator) Lock(ctx context.Context) error {
 		return err
 	}
 	c.l.Info("taking lock on coordination dir")
-	flock, err := lock.NewLock(idPath, lock.RegFile)
+	flock, err := filelock.NewLock(idPath, filelock.RegFile)
 	if err != nil {
 		return err
 	}
@@ -76,7 +76,7 @@ func (c *coordinator) Lock(ctx context.Context) error {
 			// lock get
 			break
 		}
-		if err != lock.ErrLocked {
+		if err != filelock.ErrLocked {
 			return errors.Wrap(err, "error trying to lock coordination directory")
 		}
 		// lock busy, wait and try again
