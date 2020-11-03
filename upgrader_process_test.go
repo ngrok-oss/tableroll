@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -332,7 +333,7 @@ func main1() int {
 	tableRollDir := os.Getenv("TABLEROLL_DIR")
 	listenAddr := os.Getenv("LISTEN_ADDR")
 
-	upg, err := New(ctx, tableRollDir)
+	upg, err := New(ctx, tableRollDir, strconv.Itoa(os.Getpid()))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v", err)
 		return 1
@@ -366,7 +367,7 @@ func main2() int {
 	ctx := context.Background()
 	tableRollDir := os.Getenv("TABLEROLL_DIR")
 
-	upg, err := New(ctx, tableRollDir)
+	upg, err := New(ctx, tableRollDir, strconv.Itoa(os.Getpid()))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v", err)
 		return 1
@@ -405,7 +406,7 @@ func maxSocketOpener() int {
 	ctx := context.Background()
 	tableRollDir := os.Getenv("TABLEROLL_DIR")
 
-	upg, err := New(ctx, tableRollDir)
+	upg, err := New(ctx, tableRollDir, strconv.Itoa(os.Getpid()))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v", err)
 		return 1

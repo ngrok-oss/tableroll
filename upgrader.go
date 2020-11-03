@@ -41,7 +41,6 @@ type Upgrader struct {
 	Fds *Fds
 
 	// mocks
-	os    osIface
 	clock clock.Clock
 }
 
@@ -74,15 +73,18 @@ func WithLogger(l log15.Logger) Option {
 // use the same coordination directory. The provided directory must exist and
 // be writeable by the process using tableroll.
 // Canonically, this directory is `/run/${program}/tableroll/`.
+// The next argument is an 'id', which must be unique per tableroll process.
+// This is any opaque string which uniquely identifies this process, such as
+// the PID. The identifier will also be used in tableroll log messages.
 // Any number of options to configure tableroll may also be provided.
 // If the passed in context is cancelled, any attempt to connect to an existing
 // owner will be cancelled.  To stop servicing upgrade requests and complete
 // stop the upgrader, the `Stop` method should be called.
-func New(ctx context.Context, coordinationDir string, opts ...Option) (*Upgrader, error) {
-	return newUpgrader(ctx, clock.RealClock{}, realOS{}, coordinationDir, opts...)
+func New(ctx context.Context, coordinationDir string, id string, opts ...Option) (*Upgrader, error) {
+	return newUpgrader(ctx, clock.RealClock{}, coordinationDir, id, opts...)
 }
 
-func newUpgrader(ctx context.Context, clock clock.Clock, os osIface, coordinationDir string, opts ...Option) (*Upgrader, error) {
+func newUpgrader(ctx context.Context, clock clock.Clock, coordinationDir string, id string, opts ...Option) (*Upgrader, error) {
 	noopLogger := log15.New()
 	noopLogger.SetHandler(log15.DiscardHandler())
 	u := &Upgrader{
@@ -90,13 +92,12 @@ func newUpgrader(ctx context.Context, clock clock.Clock, os osIface, coordinatio
 		state:            upgraderStateCheckingOwner,
 		upgradeCompleteC: make(chan struct{}),
 		l:                noopLogger,
-		os:               os,
 		clock:            clock,
 	}
 	for _, opt := range opts {
 		opt(u)
 	}
-	u.coord = newCoordinator(clock, os, u.l, coordinationDir)
+	u.coord = newCoordinator(clock, u.l, coordinationDir, id)
 
 	listener, err := u.coord.Listen(ctx)
 	if err != nil {

@@ -19,13 +19,13 @@ func TestGetFilesCtxCancel(t *testing.T) {
 		panic(err)
 	}
 	defer os.RemoveAll(tmpdir)
-	parent := newCoordinator(clock.RealClock{}, mockOS{pid: 1}, l, tmpdir)
+	parent := newCoordinator(clock.RealClock{}, l, tmpdir, "1")
 	parent.Listen(ctx)
 	parent.Lock(ctx)
 	parent.BecomeOwner()
 	parent.Unlock()
 
-	newParent := newCoordinator(clock.RealClock{}, mockOS{pid: 2}, l, tmpdir)
+	newParent := newCoordinator(clock.RealClock{}, l, tmpdir, "2")
 
 	sess, err := connectToCurrentOwner(ctx, l, newParent)
 	if err != nil {
