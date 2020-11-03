@@ -42,8 +42,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/inconshreveable/log15"
@@ -56,11 +58,12 @@ func main() {
 	if err := os.MkdirAll("/tmp/testroll", 0700); err != nil {
 		log.Fatalf("can't create coordination dir: %v", err)
 	}
-	upg, err := tableroll.New(ctx, "/tmp/testroll", tableroll.WithLogger(logger))
+	tablerollID := strconv.Itoa(os.Getpid())
+	upg, err := tableroll.New(ctx, "/tmp/testroll", tablerollID, tableroll.WithLogger(logger))
 	if err != nil {
 		panic(err)
 	}
-	ln, err := upg.Fds.Listen("tcp", "127.0.0.1:8080")
+	ln, err := upg.Fds.Listen(ctx, "port-8080", &net.ListenConfig{}, "tcp", "127.0.0.1:8080")
 	if err != nil {
 		log.Fatalf("can't listen: %v", err)
 	}
