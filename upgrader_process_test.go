@@ -421,13 +421,16 @@ func maxSocketOpener() int {
 	// and 500 is enough to catch the regression this is testing for.
 	minFds := 500
 	lns := []net.Listener{}
+	ids := []string{}
 	var i int
 	for i = 0; err == nil; i++ {
-		ln, err := upg.Fds.ListenWith(fmt.Sprintf("ln-%v", i), "tcp", "127.0.0.1:0", net.Listen)
+		id := fmt.Sprintf("ln-%v", i)
+		ln, err := upg.Fds.ListenWith(id, "tcp", "127.0.0.1:0", net.Listen)
 		if err != nil {
 			break
 		}
 		lns = append(lns, ln)
+		ids = append(ids, id)
 	}
 	if i < minFds {
 		fmt.Fprintf(os.Stderr, "could not open %v fds, only opened %v: %v", minFds, i+1, err)
@@ -444,6 +447,11 @@ func maxSocketOpener() int {
 	<-upg.UpgradeComplete()
 	for _, ln := range lns {
 		ln.Close()
+	}
+	// free up ids to free ip FDs for other tests
+	for _, id := range ids {
+		upg.Fds.Remove(id)
+
 	}
 	return 0
 }
