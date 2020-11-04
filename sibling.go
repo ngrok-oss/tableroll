@@ -78,7 +78,7 @@ func (s *sibling) giveFDs(readyTimeoutC <-chan time.Time, passedFiles map[string
 	// Write all files it's expecting
 	for _, fi := range validFds {
 		// dup the file we're sending since we'll eventually close 'fi.file'
-		dup, err := dupFd(fi.file.fd, fi.Name)
+		dup, err := dupFd(fi.file.fd, fi.file.Name())
 		if err != nil {
 			return fmt.Errorf("could not write fds to sibling: %v", err)
 		}

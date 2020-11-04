@@ -126,7 +126,6 @@ func (s *upgradeSession) getFiles(ctx context.Context) (map[string]*fd, error) {
 	for i := range fds {
 		fd := fds[i]
 		fd.file = sockFiles[i]
-		fd.Name = fd.file.Name()
 		files[fd.ID] = fd
 	}
 	s.l.Info("got fds from old owner", "files", files)
