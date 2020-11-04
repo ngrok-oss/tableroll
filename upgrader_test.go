@@ -445,7 +445,7 @@ func TestFailedUpgradeListen(t *testing.T) {
 	// Accept, then Close
 	go func() {
 		_, err := ln.Accept()
-		require.Contains(t, "use of a closed network connection", err.Error())
+		require.Contains(t, err.Error(), "use of closed network connection")
 	}()
 	// let the accept happen first
 	time.Sleep(1 * time.Millisecond)

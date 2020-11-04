@@ -3,12 +3,10 @@ package tableroll
 import (
 	"fmt"
 	"net"
-	"os"
 	"time"
 
 	"github.com/inconshreveable/log15"
 	"github.com/ngrok/tableroll/internal/proto"
-	"github.com/opencontainers/runc/libcontainer/utils"
 	"github.com/pkg/errors"
 )
 
@@ -58,22 +56,17 @@ func (s *sibling) giveFDs(readyTimeoutC <-chan time.Time, passedFiles map[string
 				s.l.Info("timed out, closing file and connection")
 				// fail reads/writes on timeout
 				s.conn.Close()
-				// Note: it's possible to hit a data-race between this Close and the
-				// '.Fd' call within 'utils.SendFd'
-				// I don't know if it's possible to fix this race :(
 				connFile.Close()
 			}
 		}
 	}()
 
 	validFds := make([]*fd, 0, len(fds))
-	rawFds := make([]*os.File, 0, len(fds))
 	for i := range fds {
 		fd := fds[i]
 		if fd.file == nil {
 			continue
 		}
-		rawFds = append(rawFds, fd.file.File)
 		validFds = append(validFds, fd)
 	}
 
@@ -83,8 +76,13 @@ func (s *sibling) giveFDs(readyTimeoutC <-chan time.Time, passedFiles map[string
 	}
 
 	// Write all files it's expecting
-	for _, fi := range rawFds {
-		if err := utils.SendFd(connFile, fi.Name(), fi.Fd()); err != nil {
+	for _, fi := range validFds {
+		// dup the file we're sending since we'll eventually close 'fi.file'
+		dup, err := dupFd(fi.file.fd, fi.Name)
+		if err != nil {
+			return fmt.Errorf("could not write fds to sibling: %v", err)
+		}
+		if err := sendFile(connFile, dup); err != nil {
 			return fmt.Errorf("could not write fds to sibling: %v", err)
 		}
 	}
