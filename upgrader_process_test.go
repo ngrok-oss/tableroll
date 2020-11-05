@@ -223,7 +223,7 @@ func TestMaxSocketUpg(t *testing.T) {
 	tmpdir, cleanup := tmpDir()
 	defer cleanup()
 
-	stdout, errC, exitC1 := runHelper(t, ctx, tmpdir, "maxSocketOpener", "")
+	stdout, errC, exitC1 := runHelper(t, ctx, tmpdir, "listenOnManySockets", "")
 	select {
 	case msg := <-stdout:
 		if msg != MsgReady {
@@ -235,7 +235,7 @@ func TestMaxSocketUpg(t *testing.T) {
 		t.Fatalf("unexpected exit: %v", exit)
 	}
 
-	stdout, errC, exitC := runHelper(t, ctx, tmpdir, "maxSocketOpener", "")
+	stdout, errC, exitC := runHelper(t, ctx, tmpdir, "listenOnManySockets", "")
 	select {
 	case msg := <-stdout:
 		if msg != MsgReady {
@@ -320,8 +320,8 @@ func TestSpawnHelper(t *testing.T) {
 		os.Exit(main1())
 	case "main2":
 		os.Exit(main2())
-	case "maxSocketOpener":
-		os.Exit(maxSocketOpener())
+	case "listenOnManySockets":
+		os.Exit(listenOnManySockets())
 	default:
 		fmt.Fprintf(os.Stderr, "unknown main function: %v", funcName)
 		os.Exit(1)
@@ -402,7 +402,12 @@ func main2() int {
 	return 0
 }
 
-func maxSocketOpener() int {
+// listenOnManySockets is a regression test for when we transferred all fds in
+// a single sendmsg call, which hit a limit somewhere around 300 or 400 FDs.
+// We now do 1 at a time, which should support many many more.
+// However, this test still limits itself to 800 sockets opened to avoid
+// running afoul of small ulimits, which are expected to cause issues.
+func listenOnManySockets() int {
 	ctx := context.Background()
 	tableRollDir := os.Getenv("TABLEROLL_DIR")
 
@@ -417,24 +422,19 @@ func maxSocketOpener() int {
 		return 1
 	}
 
-	// Assume we can always open at least 500, ulimits are usually around 1024
-	// and 500 is enough to catch the regression this is testing for.
-	minFds := 500
 	lns := []net.Listener{}
+	ids := []string{}
 	var i int
-	for i = 0; err == nil; i++ {
-		ln, err := upg.Fds.ListenWith(fmt.Sprintf("ln-%v", i), "tcp", "127.0.0.1:0", net.Listen)
+	for i = 0; i < 600; i++ {
+		id := fmt.Sprintf("ln-%v", i)
+		ln, err := upg.Fds.ListenWith(id, "tcp", "127.0.0.1:0", net.Listen)
 		if err != nil {
 			break
 		}
 		lns = append(lns, ln)
-	}
-	if i < minFds {
-		fmt.Fprintf(os.Stderr, "could not open %v fds, only opened %v: %v", minFds, i+1, err)
-		return 1
+		ids = append(ids, id)
 	}
 
-	// Close the last 10 to free up enough fds for the upgrade to happen
 	lns, toClose := lns[0:len(lns)-10], lns[len(lns)-10:]
 	for _, ln := range toClose {
 		ln.Close()
@@ -444,6 +444,11 @@ func maxSocketOpener() int {
 	<-upg.UpgradeComplete()
 	for _, ln := range lns {
 		ln.Close()
+	}
+	// free up ids to free ip FDs for other tests
+	for _, id := range ids {
+		upg.Fds.Remove(id)
+
 	}
 	return 0
 }

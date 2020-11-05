@@ -4,6 +4,7 @@ import (
 	"context"
 	"io/ioutil"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	v1tableroll "github.com/euank/tableroll/v1_0_0"
 	"github.com/inconshreveable/log15"
+	"github.com/stretchr/testify/require"
 	"k8s.io/utils/clock"
 	fakeclock "k8s.io/utils/clock/testing"
 )
@@ -418,6 +420,38 @@ func TestUpgradeV0ToUs(t *testing.T) {
 	// Hanging server1 request should still be service-able even after s2 has taken over
 	responses1 <- "msg2"
 	<-msg2Response
+}
+
+// TestFTestFailedUpgradeAccept tests that 'ln.Accept' works for a listener
+// correctly after a failed upgrade. This is a regression test for a bug that
+// left file descriptors in 'blocking' mode, which resulted in accept + close
+// deadlocking.
+func TestFailedUpgradeListen(t *testing.T) {
+	ctx := context.Background()
+	coordDir, cleanup := tmpDir()
+	defer cleanup()
+
+	upg1, err := newUpgrader(ctx, clock.RealClock{}, coordDir, "1", WithLogger(l.New("pid", "1")))
+	require.Nil(t, err)
+	ln, err := upg1.Fds.Listen(ctx, "id", &net.ListenConfig{}, "tcp", "127.0.0.1:0")
+	require.Nil(t, err)
+	upg1.Ready()
+
+	// fail an upgrade
+	upg2, err := newUpgrader(ctx, clock.RealClock{}, coordDir, "2", WithLogger(l.New("pid", "2")))
+	require.Nil(t, err)
+	upg2.Stop()
+
+	// Accept, then Close
+	go func() {
+		_, err := ln.Accept()
+		require.Contains(t, err.Error(), "use of closed network connection")
+	}()
+	// let the accept happen first
+	time.Sleep(1 * time.Millisecond)
+	err = ln.Close()
+	require.Nil(t, err)
+	// if we aren't deadlocked here, the regression test passes
 }
 
 func assertResp(t *testing.T, url string, c *http.Client, expected string) {

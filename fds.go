@@ -61,7 +61,11 @@ type file struct {
 }
 
 func (f *file) String() string {
-	return fmt.Sprintf("File(name=%q,fd=%v)", f.Name(), f.fd)
+	name := "<nil>"
+	if f != nil && f.File != nil {
+		name = f.Name()
+	}
+	return fmt.Sprintf("File(name=%q,fd=%v)", name, f.fd)
 }
 
 func newFile(fd uintptr, name string) *file {
@@ -88,26 +92,15 @@ type fd struct {
 	// ID is the id of this file, stored just for pretty-printing
 	ID string `json:"id"`
 
-	// for files, stored just for pretty-printing
-	Name string `json:"name,omitEmpty"`
-
 	// for conns/listeners, stored just for pretty-printing
 	Network string `json:"network,omitEmpty"`
 	Addr    string `json:"addr,omitEmpty"`
 }
 
-func (f *fd) associateFile(name string, osFile *os.File) {
-	f.file = &file{
-		osFile,
-		osFile.Fd(),
-	}
-	f.Name = name
-}
-
 func (f *fd) String() string {
 	switch f.Kind {
 	case fdKindFile:
-		return fmt.Sprintf("file(%v): %v", f.ID, f.Name)
+		return fmt.Sprintf("file(%v)", f.ID)
 	case fdKindListener:
 		return fmt.Sprintf("listener(%v): %v:%v", f.ID, f.Network, f.Addr)
 	case fdKindConn:
@@ -182,7 +175,7 @@ func (f *Fds) Listen(ctx context.Context, id string, cfg *net.ListenConfig, netw
 		return nil, err
 	}
 	if ln != nil {
-		f.l.Debug("found existing listener in store", "network", network, "addr", addr)
+		f.l.Debug("found existing listener in store", "listenerId", id, "network", network, "addr", addr)
 		return ln, nil
 	}
 
@@ -389,7 +382,6 @@ func (f *Fds) OpenFileWith(id string, name string, openFunc func(name string) (*
 
 	newFd := &fd{
 		ID:   id,
-		Name: name,
 		Kind: fdKindFile,
 		file: dup,
 	}

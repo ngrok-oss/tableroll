@@ -4,12 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
 	"sync"
 
 	"github.com/inconshreveable/log15"
 	"github.com/ngrok/tableroll/internal/proto"
-	"github.com/opencontainers/runc/libcontainer/utils"
 	"github.com/pkg/errors"
 )
 
@@ -113,10 +111,11 @@ func (s *upgradeSession) getFiles(ctx context.Context) (map[string]*fd, error) {
 		// it changes from the owner ith how I have this.
 		sockFileNames = append(sockFileNames, fd.String())
 	}
-	sockFiles := make([]*os.File, 0, len(sockFileNames))
+	sockFiles := make([]*file, 0, len(sockFileNames))
 	for i := 0; i < len(sockFileNames); i++ {
-		file, err := utils.RecvFd(sockFile)
+		file, err := recvFile(sockFile)
 		if err != nil {
+			s.l.Error("error receiving a file descriptor", "err", err)
 			return nil, orContextErr(errors.Wrap(err, "error getting file descriptors"))
 		}
 		sockFiles = append(sockFiles, file)
@@ -126,8 +125,7 @@ func (s *upgradeSession) getFiles(ctx context.Context) (map[string]*fd, error) {
 	}
 	for i := range fds {
 		fd := fds[i]
-		fd.associateFile(fd.String(), sockFiles[i])
-
+		fd.file = sockFiles[i]
 		files[fd.ID] = fd
 	}
 	s.l.Info("got fds from old owner", "files", files)
