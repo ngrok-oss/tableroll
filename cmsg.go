@@ -1,15 +1,31 @@
 package tableroll
 
+// Taken from
+// https://github.com/opencontainers/runc/blob/cf6c074115d00c932ef01dedb3e13ba8b8f964c3/libcontainer/utils/cmsg.go,
+// and modified under the terms of the apache license, 2.0.
+
+/*
+ * Copyright 2016, 2017 SUSE LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import (
 	"fmt"
 	"os"
 
 	"golang.org/x/sys/unix"
 )
-
-// This file is partilaly based on
-// https://github.com/opencontainers/runc/blob/cf6c074115d00c932ef01dedb3e13ba8b8f964c3/libcontainer/utils/cmsg.go,
-// used under the terms of the apache license, 2.0.
 
 // oobSpace is the size of the oob slice required to store a single FD. Note
 // that unix.UnixRights appears to make the assumption that fd is always int32,
