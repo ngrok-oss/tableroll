@@ -107,7 +107,7 @@ func TestMutableUpgrading(t *testing.T) {
 	coordDir, cleanup := tmpDir()
 	defer cleanup()
 
-	upg1, err := newUpgrader(context.Background(), clock.RealClock{}, mockOS{pid: 1}, coordDir, WithLogger(l))
+	upg1, err := newUpgrader(context.Background(), clock.RealClock{}, coordDir, "1", WithLogger(l))
 	if err != nil {
 		t.Fatalf("error creating upgrader: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestMutableUpgrading(t *testing.T) {
 		close(upgradeDone)
 	}()
 
-	upg2, err := newUpgrader(context.Background(), clock.RealClock{}, mockOS{pid: 2}, coordDir, WithLogger(l))
+	upg2, err := newUpgrader(context.Background(), clock.RealClock{}, coordDir, "2", WithLogger(l))
 	if err != nil {
 		t.Fatalf("error creating upgrader: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestFdPassMultipleTimes(t *testing.T) {
 	syncUpgraderTimeout := make(chan struct{})
 	go func() {
 		// Now make an s2 that fails to ready-up
-		upg2, err := newUpgrader(ctx, clock, mockOS{pid: 2}, coordDir, WithLogger(l))
+		upg2, err := newUpgrader(ctx, clock, coordDir, "2", WithLogger(l))
 		if err != nil {
 			t.Fatalf("expected no error creating upgrader: %v", err)
 		}
@@ -293,7 +293,7 @@ func TestUpgradeHandoffCloseCtx(t *testing.T) {
 	defer cleanup()
 
 	ctx1, cancel1 := context.WithTimeout(context.Background(), 1*time.Second)
-	upg1, err := newUpgrader(ctx1, clock.RealClock{}, mockOS{pid: 1}, coordDir, WithLogger(l))
+	upg1, err := newUpgrader(ctx1, clock.RealClock{}, coordDir, "1", WithLogger(l))
 	if err != nil {
 		t.Fatalf("error creating upgrader: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestUpgradeHandoffCloseCtx(t *testing.T) {
 	}
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
-	upg2, err := newUpgrader(ctx2, clock.RealClock{}, mockOS{pid: 2}, coordDir, WithLogger(l))
+	upg2, err := newUpgrader(ctx2, clock.RealClock{}, coordDir, "2", WithLogger(l))
 	if err != nil {
 		t.Fatalf("error creating upgrader: %v", err)
 	}
@@ -322,7 +322,7 @@ func TestUpgradeTimeout(t *testing.T) {
 	defer cleanup()
 
 	// If upg1 times out serving the upgrade, upg2 should not be able to think it's the owner
-	upg1, err := newUpgrader(ctx, clock, mockOS{pid: 1}, coordDir, WithLogger(l.New("pid", "1")), WithUpgradeTimeout(30*time.Millisecond))
+	upg1, err := newUpgrader(ctx, clock, coordDir, "1", WithLogger(l.New("pid", "1")), WithUpgradeTimeout(30*time.Millisecond))
 	if err != nil {
 		t.Fatalf("error creating upgrader: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestUpgradeTimeout(t *testing.T) {
 		t.Fatalf("unable to mark self as ready: %v", err)
 	}
 
-	upg2, err := newUpgrader(ctx, clock, mockOS{pid: 2}, coordDir, WithLogger(l.New("pid", "2")))
+	upg2, err := newUpgrader(ctx, clock, coordDir, "2", WithLogger(l.New("pid", "2")))
 	if err != nil {
 		t.Fatalf("error creating upgrader: %v", err)
 	}
@@ -446,7 +446,7 @@ func createTestServer(t *testing.T, clock clock.Clock, pid int, coordDir string)
 		w.Write([]byte(resp))
 	}))
 
-	upg, err := newUpgrader(context.Background(), clock, mockOS{pid: pid}, coordDir, WithLogger(l))
+	upg, err := newUpgrader(context.Background(), clock, coordDir, strconv.Itoa(pid), WithLogger(l))
 	if err != nil {
 		t.Fatalf("error creating upgrader: %v", err)
 	}

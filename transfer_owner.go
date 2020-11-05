@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"sync"
-	"syscall"
 
 	"github.com/inconshreveable/log15"
 	"github.com/ngrok/tableroll/internal/proto"
@@ -20,11 +19,6 @@ type upgradeSession struct {
 	coordinator  *coordinator
 	ownerVersion uint32
 	l            log15.Logger
-}
-
-func pidIsDead(osi osIface, pid int) bool {
-	proc, _ := osi.FindProcess(pid)
-	return proc.Signal(syscall.Signal(0)) != nil
 }
 
 func connectToCurrentOwner(ctx context.Context, l log15.Logger, coord *coordinator) (*upgradeSession, error) {

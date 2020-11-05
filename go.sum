@@ -1,3 +1,5 @@
+github.com/euank/filelock v0.0.0-20200318073246-6ea232a62104 h1:ZWa+OP7bAv6VzHk4TGs8tAgqjiwPX0MHpy91RU2EwBk=
+github.com/euank/filelock v0.0.0-20200318073246-6ea232a62104/go.mod h1:ru909esF20lQaIexNrnNvUglS/iVrZzYnt6EsPxyWP8=
 github.com/euank/tableroll v1.0.1-0.20190509205925-1c7855724129 h1:oDXWZeVpyOpwiT/4qTGcG1kLEYMIzEhQcobFJNk/q6Y=
 github.com/euank/tableroll v1.0.1-0.20190509205925-1c7855724129/go.mod h1:KQ+1DFOz7fXvymPM5QN0korxL5Ai0t3xNG/vRWP42C0=
 github.com/go-stack/stack v1.8.0 h1:5SgMzNM5HxrEjV0ww2lTmX6E2Izsfxas4+YHWRs3Lsk=

@@ -7,12 +7,11 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
 	"time"
 
+	"github.com/euank/filelock"
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
-	"github.com/rkt/rkt/pkg/lock"
 	"k8s.io/utils/clock"
 )
 
@@ -28,23 +27,23 @@ var errNoOwner = errors.New("no owner process exists")
 // between a read and update.
 // It is implemented in this case with unix locks on a file.
 type coordinator struct {
-	lock *lock.FileLock
+	lock *filelock.FileLock
 	dir  string
+	id   string
 	l    log15.Logger
 
 	// mocks
-	os    osIface
 	clock clock.Clock
 }
 
-func newCoordinator(clock clock.Clock, os osIface, l log15.Logger, dir string) *coordinator {
+func newCoordinator(clock clock.Clock, l log15.Logger, dir string, id string) *coordinator {
 	l = l.New("dir", dir)
-	coord := &coordinator{dir: dir, l: l, clock: clock, os: os}
+	coord := &coordinator{dir: dir, l: l, clock: clock, id: id}
 	return coord
 }
 
 func (c *coordinator) Listen(ctx context.Context) (*net.UnixListener, error) {
-	listenpath := upgradeSockPath(c.dir, c.os.Getpid())
+	listenpath := upgradeSockPath(c.dir, c.id)
 	l, err := (&net.ListenConfig{}).Listen(ctx, "unix", listenpath)
 	if err != nil {
 		return nil, err
@@ -62,12 +61,12 @@ func touchFile(path string) error {
 // directory is already locked, the function will block until the lock can be
 // acquired, or until the passed context is cancelled.
 func (c *coordinator) Lock(ctx context.Context) error {
-	pidPath := c.pidFile()
-	if err := touchFile(pidPath); err != nil {
+	idPath := c.idFile()
+	if err := touchFile(idPath); err != nil {
 		return err
 	}
 	c.l.Info("taking lock on coordination dir")
-	flock, err := lock.NewLock(pidPath, lock.RegFile)
+	flock, err := filelock.NewLock(idPath, filelock.RegFile)
 	if err != nil {
 		return err
 	}
@@ -77,7 +76,7 @@ func (c *coordinator) Lock(ctx context.Context) error {
 			// lock get
 			break
 		}
-		if err != lock.ErrLocked {
+		if err != filelock.ErrLocked {
 			return errors.Wrap(err, "error trying to lock coordination directory")
 		}
 		// lock busy, wait and try again
@@ -88,19 +87,19 @@ func (c *coordinator) Lock(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func (c *coordinator) pidFile() string {
+func (c *coordinator) idFile() string {
+	// named 'pid' for historical reasons, originally the opaque id was always a pid
 	return filepath.Join(c.dir, "pid")
 }
 
 // BecomeOwner marks this coordinator as the owner of the coordination directory.
 // It should only be called while the lock is held.
 func (c *coordinator) BecomeOwner() error {
-	pid := c.os.Getpid()
-	c.l.Info("writing pid to become owner", "pid", pid)
-	return ioutil.WriteFile(c.pidFile(), []byte(strconv.Itoa(pid)), 0755)
+	c.l.Info("writing id to become owner", "id", c.id)
+	return ioutil.WriteFile(c.idFile(), []byte(c.id), 0755)
 }
 
-// Unlock unlocks the coordination pid file
+// Unlock unlocks the coordination id file
 func (c *coordinator) Unlock() error {
 	if c.lock == nil {
 		c.l.Info("not unlocking coordination dir; not locked")
@@ -110,52 +109,36 @@ func (c *coordinator) Unlock() error {
 	return c.lock.Unlock()
 }
 
-// GetOwnerPID returns the current 'owner' for this coordination directory.
-// It will return '0' as the PID if there is no owner.
-func (c *coordinator) GetOwnerPID() (int, error) {
+// GetOwnerID returns the current 'owner' for this coordination directory.
+// It will return 'errNoOwner' if there isn't currently an owner.
+func (c *coordinator) GetOwnerID() (string, error) {
 	c.l.Info("discovering current owner")
-	data, err := ioutil.ReadFile(c.pidFile())
+	data, err := ioutil.ReadFile(c.idFile())
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 	if len(data) == 0 {
 		// empty file, that means no owner
-		return 0, nil
+		return "", errNoOwner
 	}
-	pid, err := strconv.Atoi(string(data))
-	if err != nil {
-		return 0, fmt.Errorf("unable to parse pid out of data %q: %v", string(data), err)
-	}
-	c.l.Info("found owner", "owner", pid)
-	return pid, nil
+	c.l.Info("found owner", "owner", string(data))
+	return string(data), nil
 }
 
 func (c *coordinator) ConnectOwner(ctx context.Context) (*net.UnixConn, error) {
-	ppid, err := c.GetOwnerPID()
+	oid, err := c.GetOwnerID()
 	if err != nil {
 		return nil, err
 	}
-	c.l.Info("connecting to owner", "owner", ppid)
-	if ppid == 0 || pidIsDead(c.os, ppid) {
-		c.l.Info("owner does not exist or is dead", "owner", ppid)
-		return nil, errNoOwner
-	}
+	c.l.Info("connecting to owner", "owner", oid)
 
-	sockPath := upgradeSockPath(c.dir, ppid)
+	sockPath := upgradeSockPath(c.dir, oid)
 	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", sockPath)
 	if err != nil {
 		if isContextDialErr(err) {
 			return nil, err
 		}
-		// Otherwise assume this is ECONNREFUSED even though we can't reliably
-		// detect it.
-		// ECONNREFUSED here means that the pidfile had X in it, process X's pid is
-		// alive (possibly due to reuse), and X is not listening on its socket.
-		// That means X is a misbehaving tableroll process since it should *never*
-		// have let us grab the pid lock unless it was also already listening on
-		// its socket.  Our best bet is thus to assume that process is not a
-		// tableroll process and just take over.
-		c.l.Warn("found living pid in coordination dir, but it wasn't listening for us", "pid", ppid, "dialErr", err)
+		c.l.Warn("found an owner ID, but it wasn't listening; possibly a stale process that crashed?", "oid", oid, "dialErr", err)
 		return nil, errNoOwner
 	}
 
@@ -169,6 +152,6 @@ func isContextDialErr(err error) bool {
 	return err == context.Canceled || err == context.DeadlineExceeded
 }
 
-func upgradeSockPath(coordinationDir string, pid int) string {
-	return filepath.Join(coordinationDir, fmt.Sprintf("%d.sock", pid))
+func upgradeSockPath(coordinationDir string, oid string) string {
+	return filepath.Join(coordinationDir, fmt.Sprintf("%s.sock", oid))
 }

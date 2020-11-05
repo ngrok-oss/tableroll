@@ -1,6 +1,7 @@
 module github.com/ngrok/tableroll
 
 require (
+	github.com/euank/filelock v0.0.0-20200318073246-6ea232a62104
 	github.com/euank/tableroll v1.0.1-0.20190509205925-1c7855724129
 	github.com/inconshreveable/log15 v0.0.0-20180818164646-67afb5ed74ec
 	github.com/opencontainers/runc v0.0.0-00010101000000-000000000000
