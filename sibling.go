@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/inconshreveable/log15"
-	"github.com/ngrok/tableroll/internal/proto"
+	"github.com/ngrok/tableroll/v2/internal/proto"
 	"github.com/pkg/errors"
 )
 
