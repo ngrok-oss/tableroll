@@ -10,7 +10,7 @@ The primary difference between 'tableflip' and 'tableroll' is that 'tableroll'
 does not require updates to re-use the existing executable binary nor does it
 enforce any process heirarchy between the old and new processes.
 
-It is expected that the old and new procsses in a tableroll upgrade will both
+It is expected that the old and new processes in a tableroll upgrade will both
 be managed by an external service manager, such as a systemd template unit.
 
 Instead of coordinating upgrades between a parent and child process, tableroll
