@@ -49,7 +49,7 @@ import (
 	"time"
 
 	"github.com/inconshreveable/log15"
-	"github.com/ngrok/tableroll"
+	"github.com/ngrok-oss/tableroll/v2"
 )
 
 func main() {
