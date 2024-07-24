@@ -1,0 +1,32 @@
+name: lint
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+permissions:
+  contents: read
+  # Optional: allow read access to pull request. Use with `only-new-issues` option.
+  # pull-requests: read
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 2
+      - uses: cachix/install-nix-action@v18
+      - uses: HatsuneMiku3939/direnv-action@v1
+      - name: direnv allow
+        run: direnv allow .
+      - name: Run goimports
+        shell: bash
+        run: |
+          shopt -s globstar
+          direnv exec . goimports -format-only -w -local github.com/ngrok/tableroll **/*.go
+      - name: Lint
+        run: direnv exec . golangci-lint run .
+      - name: Check diff
+        shell: bash
+        run: git diff --exit-code
