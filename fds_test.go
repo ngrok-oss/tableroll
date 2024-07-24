@@ -2,11 +2,12 @@ package tableroll
 
 import (
 	"context"
-	"io/ioutil"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestFdsListen(t *testing.T) {
@@ -42,11 +43,7 @@ func TestFdsListener(t *testing.T) {
 	}
 	defer tcp.Close()
 
-	temp, err := ioutil.TempDir("", "tableflip")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(temp)
+	temp := tmpDir(t)
 
 	socketPath := filepath.Join(temp, "socket")
 	socketPath2 := filepath.Join(temp, "socket2")
@@ -84,20 +81,19 @@ func TestFdsListener(t *testing.T) {
 
 	child := newFds(l, parent.copy())
 	ln, err := child.Listener("1")
-	if err != nil {
-		t.Fatal("Can't get listener:", err)
-	}
+	require.NoError(t, err)
 	if ln == nil {
 		t.Fatal("Missing listener")
 	}
 	ln.Close()
 
-	child.Remove("2")
+	require.NoError(t, child.Remove("2"))
 	if _, err := os.Stat(socketPath); err != nil {
 		t.Errorf("expected socket to still exist")
 	}
 
 	ln, err = child.Listener("3")
+	require.NoError(t, err)
 	ln.(*net.UnixListener).SetUnlinkOnClose(true)
 	ln.Close()
 	if _, err := os.Stat(socketPath2); err == nil {
@@ -117,10 +113,10 @@ func TestFdsConn(t *testing.T) {
 		t.Fatal("Can't add conn:", err)
 	}
 	unixConn.Close()
-	defer parent.Remove("1")
+	defer func() { _ = parent.Remove("1") }()
 
 	child := newFds(l, parent.copy())
-	defer child.Remove("1")
+	defer func() { _ = child.Remove("1") }()
 	conn, err := child.Conn("1")
 	if err != nil {
 		t.Fatal("Can't get conn:", err)
@@ -145,7 +141,7 @@ func TestFdsFile(t *testing.T) {
 		t.Fatal("Can't add file:", err)
 	}
 	w.Close()
-	defer parent.Remove("test")
+	defer func() { require.NoError(t, parent.Remove("test")) }()
 
 	child := newFds(l, parent.copy())
 	file, err := child.File("test")
@@ -162,7 +158,7 @@ func TestFdsLock(t *testing.T) {
 	fds := newFds(l, nil)
 
 	ln, err := fds.ListenWith("1", "tcp", "127.0.0.1:0", net.Listen)
-	defer ln.Close()
+	defer func() { require.NoError(t, ln.Close()) }()
 	if err != nil {
 		t.Fatalf("expected no error in unlocked fds: %v", err)
 	}

@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
@@ -33,15 +32,13 @@ func loopbackTCPAddr(t *testing.T) string {
 }
 
 func TestBasicProcessUpgrade(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	tmpdir, cleanup := tmpDir()
-	defer cleanup()
+	ctx := testCtx(t)
+	tmpdir := tmpDir(t)
 
 	testAddr := loopbackTCPAddr(t)
 	t.Logf("running with addr %v", testAddr)
 
-	stdout, errC, exitC := runHelper(t, ctx, tmpdir, "main1", testAddr)
+	stdout, errC, exitC := runHelper(ctx, tmpdir, "main1", testAddr)
 
 	select {
 	case msg := <-stdout:
@@ -77,7 +74,7 @@ func TestBasicProcessUpgrade(t *testing.T) {
 	}
 
 	// Now pass fds to process 2
-	stdout2, errC2, exitC2 := runHelper(t, ctx, tmpdir, "main1", testAddr)
+	stdout2, errC2, exitC2 := runHelper(ctx, tmpdir, "main1", testAddr)
 
 	// process 1 should exit
 	select {
@@ -128,13 +125,11 @@ func TestBasicProcessUpgrade(t *testing.T) {
 }
 
 func TestUnixMultiProcessUpgrade(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	tmpdir, cleanup := tmpDir()
-	defer cleanup()
+	ctx := testCtx(t)
+	tmpdir := tmpDir(t)
 
 	sock := filepath.Join(tmpdir, "testsock")
-	stdout, errC, exitC := runHelper(t, ctx, tmpdir, "main2", "")
+	stdout, errC, exitC := runHelper(ctx, tmpdir, "main2", "")
 
 	select {
 	case msg := <-stdout:
@@ -152,7 +147,7 @@ func TestUnixMultiProcessUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error in get")
 	}
-	data, _ := ioutil.ReadAll(conn)
+	data, _ := io.ReadAll(conn)
 	if string(data) != "hello world" {
 		t.Fatalf("expected hello world, got %s", data)
 	}
@@ -172,7 +167,7 @@ func TestUnixMultiProcessUpgrade(t *testing.T) {
 	// now pass fds through 10 more processes
 	for i := 0; i < 10; i++ {
 		// Now pass fds to process n
-		stdoutn, errCn, exitCn := runHelper(t, ctx, tmpdir, "main2", "")
+		stdoutn, errCn, exitCn := runHelper(ctx, tmpdir, "main2", "")
 
 		// process n-1 should exit
 		exit := <-prevExit
@@ -197,7 +192,7 @@ func TestUnixMultiProcessUpgrade(t *testing.T) {
 		if err != nil {
 			t.Fatalf("expected no error in get")
 		}
-		data, _ = ioutil.ReadAll(conn)
+		data, _ = io.ReadAll(conn)
 		if string(data) != "hello world" {
 			t.Fatalf("expected hello world, got %s", data)
 		}
@@ -220,10 +215,9 @@ func TestUnixMultiProcessUpgrade(t *testing.T) {
 func TestMaxSocketUpg(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	tmpdir, cleanup := tmpDir()
-	defer cleanup()
+	tmpdir := tmpDir(t)
 
-	stdout, errC, exitC1 := runHelper(t, ctx, tmpdir, "listenOnManySockets", "")
+	stdout, errC, exitC1 := runHelper(ctx, tmpdir, "listenOnManySockets", "")
 	select {
 	case msg := <-stdout:
 		if msg != MsgReady {
@@ -235,7 +229,7 @@ func TestMaxSocketUpg(t *testing.T) {
 		t.Fatalf("unexpected exit: %v", exit)
 	}
 
-	stdout, errC, exitC := runHelper(t, ctx, tmpdir, "listenOnManySockets", "")
+	stdout, errC, exitC := runHelper(ctx, tmpdir, "listenOnManySockets", "")
 	select {
 	case msg := <-stdout:
 		if msg != MsgReady {
@@ -257,16 +251,16 @@ func TestMaxSocketUpg(t *testing.T) {
 // These are used to allow integration style testing of multiple processes.
 // This function takes a tableroll directory and function name to execute, and
 // optionally a tcp address to listen on which is used by certain tests.
-func runHelper(t *testing.T, ctx context.Context, dir string, funcName string, addr string) (<-chan string, <-chan error, <-chan int) {
+func runHelper(ctx context.Context, dir string, funcName string, addr string) (<-chan string, <-chan error, <-chan int) {
 	child := exec.CommandContext(ctx, os.Args[0], "-test.run=TestSpawnHelper", "--")
 	stderr, _ := child.StderrPipe()
 	stdout, _ := child.StdoutPipe()
 
 	var stderrBuffer bytes.Buffer
-	stderrEOF := make(chan struct{})
+	stderrEOF := make(chan error, 1)
 	go func() {
-		io.Copy(&stderrBuffer, stderr)
-		stderrEOF <- struct{}{}
+		_, err := io.Copy(&stderrBuffer, stderr)
+		stderrEOF <- err
 	}()
 
 	child.Env = append(child.Env, []string{
@@ -292,7 +286,9 @@ func runHelper(t *testing.T, ctx context.Context, dir string, funcName string, a
 	}()
 	go func() {
 		err := child.Run()
-		<-stderrEOF
+		if err := <-stderrEOF; err != nil {
+			errorChan <- fmt.Errorf("error getting stderrEOF: %w", err)
+		}
 		if stderrBuffer.Len() != 0 {
 			errorChan <- fmt.Errorf("stderr: %v", stderrBuffer.String())
 		}
@@ -346,10 +342,13 @@ func main1() int {
 	server := &http.Server{
 		Handler: http.HandlerFunc(func(r http.ResponseWriter, req *http.Request) {
 			fmt.Println(MsgServedRequest)
-			r.Write([]byte(fmt.Sprintf("hello from %v!\n", os.Getpid())))
+			_, err := r.Write([]byte(fmt.Sprintf("hello from %v!\n", os.Getpid())))
+			if err != nil {
+				panic(err)
+			}
 		}),
 	}
-	go server.Serve(ln)
+	go func() { _ = server.Serve(ln) }()
 
 	if err := upg.Ready(); err != nil {
 		fmt.Fprintf(os.Stderr, "%v", err)
@@ -385,7 +384,10 @@ func main2() int {
 			if err != nil {
 				return
 			}
-			conn.Write([]byte("hello world"))
+			_, err = conn.Write([]byte("hello world"))
+			if err != nil {
+				panic(err)
+			}
 			conn.Close()
 			fmt.Println(MsgServedRequest)
 		}
@@ -447,8 +449,9 @@ func listenOnManySockets() int {
 	}
 	// free up ids to free ip FDs for other tests
 	for _, id := range ids {
-		upg.Fds.Remove(id)
-
+		if err := upg.Fds.Remove(id); err != nil {
+			panic(err)
+		}
 	}
 	return 0
 }

@@ -2,7 +2,7 @@ package tableroll
 
 import (
 	"context"
-	"io/ioutil"
+	"io"
 	"math/rand"
 	"net"
 	"net/http"
@@ -20,16 +20,6 @@ import (
 )
 
 var l = log15.New()
-
-func tmpDir() (string, func()) {
-	dir, err := ioutil.TempDir("", "tableroll_test")
-	if err != nil {
-		panic(err)
-	}
-	return dir, func() {
-		os.RemoveAll(dir)
-	}
-}
 
 // TestGCingUpgradeHandoff tests that the upgradehandoff test works even with
 // gc running more frequently.
@@ -59,8 +49,7 @@ func TestGCingUpgradeHandoff(t *testing.T) {
 // TestUpgradeHandoff tests the happy path flow of two servers handing off the listening socket.
 // It includes one client connection that spans the listener handoff and must be drained.
 func TestUpgradeHandoff(t *testing.T) {
-	coordDir, cleanup := tmpDir()
-	defer cleanup()
+	coordDir := tmpDir(t)
 
 	// Server 1 starts listening
 	server1Reqs, server1Msgs, upg1, s1 := createTestServer(t, clock.RealClock{}, 1, coordDir)
@@ -105,19 +94,14 @@ func TestUpgradeHandoff(t *testing.T) {
 }
 
 func TestMutableUpgrading(t *testing.T) {
-	coordDir, cleanup := tmpDir()
-	defer cleanup()
+	coordDir := tmpDir(t)
 
 	upg1, err := newUpgrader(context.Background(), clock.RealClock{}, coordDir, "1", WithLogger(l))
-	if err != nil {
-		t.Fatalf("error creating upgrader: %v", err)
-	}
-	if err := upg1.Ready(); err != nil {
-		t.Fatalf("error marking ready: %v", err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, upg1.Ready())
 	defer upg1.Stop()
 
-	upgradeDone := make(chan struct{})
+	upgradeDone := make(chan error, 1)
 	expectedFis := map[string]*os.File{}
 	// Mutably add a bunch of fds to the store at random, make sure that all the ones that were added without error are inherited
 	go func() {
@@ -130,13 +114,15 @@ func TestMutableUpgrading(t *testing.T) {
 				if err = upg1.Fds.Remove(id); err == nil {
 					delete(expectedFis, id)
 				} else if err != ErrUpgradeInProgress && err != ErrUpgradeCompleted {
-					t.Fatalf("unexpected error: %v", err)
+					upgradeDone <- err
+					return
 				}
 			} else {
 				if fi, err = upg1.Fds.OpenFileWith(id, id, memoryOpenFile); err == nil {
 					expectedFis[id] = fi
 				} else if err != ErrUpgradeInProgress && err != ErrUpgradeCompleted {
-					t.Fatalf("unexpected error: %v", err)
+					upgradeDone <- err
+					return
 				}
 			}
 		}
@@ -144,19 +130,15 @@ func TestMutableUpgrading(t *testing.T) {
 	}()
 
 	upg2, err := newUpgrader(context.Background(), clock.RealClock{}, coordDir, "2", WithLogger(l))
-	if err != nil {
-		t.Fatalf("error creating upgrader: %v", err)
-	}
-	if err := upg2.Ready(); err != nil {
-		t.Fatalf("error marking ready: %v", err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, upg2.Ready())
 
 	// we expect that upg1 should have gotten a terminal error and we should have
 	// got the full set of ids it thinks it stored
-	<-upgradeDone
+	require.NoError(t, <-upgradeDone)
 
 	for id, expectedFi := range expectedFis {
-		if fi, err := upg2.Fds.File(id); fi != fi || err != nil {
+		if fi, err := upg2.Fds.File(id); err != nil {
 			t.Errorf("expected upg2 to have file for %v of %#v, but had file %#v, err %v", id, expectedFi, fi, err)
 		}
 	}
@@ -168,14 +150,7 @@ func TestMutableUpgrading(t *testing.T) {
 // TestPIDReuse verifies that if a new server gets a pid of a previous server,
 // it can still listen on the `${pid}.sock` socket correctly.
 func TestPIDReuse(t *testing.T) {
-	coordDir, err := ioutil.TempDir("", "tableroll_test")
-	if err != nil {
-		panic(err)
-	}
-	defer os.RemoveAll(coordDir)
-
-	server1Msgs, server2Msgs := make(chan string), make(chan string)
-	server1Reqs, server2Reqs := make(chan struct{}), make(chan struct{})
+	coordDir := tmpDir(t)
 
 	// Server 1 starts listening
 	server1Reqs, server1Msgs, upg1, s1 := createTestServer(t, clock.RealClock{}, 1, coordDir)
@@ -229,8 +204,7 @@ func TestPIDReuse(t *testing.T) {
 func TestFdPassMultipleTimes(t *testing.T) {
 	ctx := context.Background()
 	clock := fakeclock.NewFakeClock(time.Now())
-	coordDir, cleanup := tmpDir()
-	defer cleanup()
+	coordDir := tmpDir(t)
 
 	server1Reqs, server1Msgs, upg1, s1 := createTestServer(t, clock, 1, coordDir)
 	defer upg1.Stop()
@@ -245,33 +219,32 @@ func TestFdPassMultipleTimes(t *testing.T) {
 	assertResp(t, s1.URL, c1, "msg1")
 	// s1 listening
 
-	syncUpgraderTimeout := make(chan struct{})
+	syncUpgraderTimeout := make(chan error, 1)
 	go func() {
 		// Now make an s2 that fails to ready-up
 		upg2, err := newUpgrader(ctx, clock, coordDir, "2", WithLogger(l))
 		if err != nil {
-			t.Fatalf("expected no error creating upgrader: %v", err)
+			syncUpgraderTimeout <- err
+			return
 		}
 		// now the upgrader is connected, but not 'Ready', so the server should be
 		// waiting on a ready timeout soon
-		syncUpgraderTimeout <- struct{}{}
+		syncUpgraderTimeout <- nil
 		// wait for the server to get a timeout before we stop, otherwise
 		// `HasWaiters` could deadlock due to `Stop` causing the server to not
 		// timeout
 		<-syncUpgraderTimeout
 		upg2.Stop()
 	}()
-	<-syncUpgraderTimeout
+	require.NoError(t, <-syncUpgraderTimeout)
 	// wait for the upgrade server to start waiting for a ready, then skip
 	// forward 3 minutes since the timeout is 2 minutes by default
 	for !clock.HasWaiters() {
 		time.Sleep(1 * time.Millisecond)
 	}
 	clock.Step(3 * time.Minute)
-	syncUpgraderTimeout <- struct{}{}
+	close(syncUpgraderTimeout)
 
-	server3Msgs := make(chan string)
-	server3Reqs := make(chan struct{})
 	// now see that we get a working s3
 	server3Reqs, server3Msgs, upg3, s3 := createTestServer(t, clock, 3, coordDir)
 	defer upg3.Stop()
@@ -290,51 +263,35 @@ func TestFdPassMultipleTimes(t *testing.T) {
 // TestUpgradeHandoffCloseCtx closes the 'New' context as soon as possible and
 // verifies that the context was only for instantiation.
 func TestUpgradeHandoffCloseCtx(t *testing.T) {
-	coordDir, cleanup := tmpDir()
-	defer cleanup()
+	coordDir := tmpDir(t)
 
 	ctx1, cancel1 := context.WithTimeout(context.Background(), 1*time.Second)
 	upg1, err := newUpgrader(ctx1, clock.RealClock{}, coordDir, "1", WithLogger(l))
-	if err != nil {
-		t.Fatalf("error creating upgrader: %v", err)
-	}
+	require.NoError(t, err)
 	defer upg1.Stop()
 	cancel1()
-	if err := upg1.Ready(); err != nil {
-		t.Fatalf("unable to mark self as ready: %v", err)
-	}
+	require.NoError(t, upg1.Ready())
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
 	upg2, err := newUpgrader(ctx2, clock.RealClock{}, coordDir, "2", WithLogger(l))
-	if err != nil {
-		t.Fatalf("error creating upgrader: %v", err)
-	}
+	require.NoError(t, err)
 	defer upg2.Stop()
 	cancel2()
-	if err := upg2.Ready(); err != nil {
-		t.Fatalf("unable to mark self as ready: %v", err)
-	}
+	require.NoError(t, upg2.Ready())
 }
 
 func TestUpgradeTimeout(t *testing.T) {
 	ctx := context.Background()
 	clock := fakeclock.NewFakeClock(time.Now())
-	coordDir, cleanup := tmpDir()
-	defer cleanup()
+	coordDir := tmpDir(t)
 
 	// If upg1 times out serving the upgrade, upg2 should not be able to think it's the owner
 	upg1, err := newUpgrader(ctx, clock, coordDir, "1", WithLogger(l.New("pid", "1")), WithUpgradeTimeout(30*time.Millisecond))
-	if err != nil {
-		t.Fatalf("error creating upgrader: %v", err)
-	}
-	if err := upg1.Ready(); err != nil {
-		t.Fatalf("unable to mark self as ready: %v", err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, upg1.Ready())
 
 	upg2, err := newUpgrader(ctx, clock, coordDir, "2", WithLogger(l.New("pid", "2")))
-	if err != nil {
-		t.Fatalf("error creating upgrader: %v", err)
-	}
+	require.NoError(t, err)
 	// upg1 serve timeout
 	for !clock.HasWaiters() {
 		time.Sleep(1 * time.Millisecond)
@@ -356,14 +313,13 @@ func TestUpgradeTimeout(t *testing.T) {
 // deadlocking.
 func TestFailedUpgradeListen(t *testing.T) {
 	ctx := context.Background()
-	coordDir, cleanup := tmpDir()
-	defer cleanup()
+	coordDir := tmpDir(t)
 
 	upg1, err := newUpgrader(ctx, clock.RealClock{}, coordDir, "1", WithLogger(l.New("pid", "1")))
 	require.Nil(t, err)
 	ln, err := upg1.Fds.Listen(ctx, "id", &net.ListenConfig{}, "tcp", "127.0.0.1:0")
 	require.Nil(t, err)
-	upg1.Ready()
+	require.NoError(t, upg1.Ready())
 
 	// fail an upgrade
 	upg2, err := newUpgrader(ctx, clock.RealClock{}, coordDir, "2", WithLogger(l.New("pid", "2")))
@@ -384,16 +340,10 @@ func TestFailedUpgradeListen(t *testing.T) {
 
 func assertResp(t *testing.T, url string, c *http.Client, expected string) {
 	resp, err := c.Get(url)
-	if err != nil {
-		t.Fatalf("error using test server 1: %v", err)
-	}
-	respData, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("error reading body: %v", err)
-	}
-	if expected != string(respData) {
-		t.Fatalf("expected %s, got %s", expected, string(respData))
-	}
+	require.NoError(t, err)
+	respData, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, expected, string(respData))
 }
 
 func createTestServer(t *testing.T, clock clock.Clock, pid int, coordDir string) (chan struct{}, chan string, *Upgrader, *httptest.Server) {
@@ -405,23 +355,20 @@ func createTestServer(t *testing.T, clock clock.Clock, pid int, coordDir string)
 		requests <- struct{}{}
 		// And now respond, as requested by the test harness
 		resp := <-responses
-		w.Write([]byte(resp))
+		_, err := w.Write([]byte(resp))
+		if err != nil {
+			panic(err)
+		}
 	}))
 
 	upg, err := newUpgrader(context.Background(), clock, coordDir, strconv.Itoa(pid), WithLogger(l))
-	if err != nil {
-		t.Fatalf("error creating upgrader: %v", err)
-	}
+	require.NoError(t, err)
 
 	listen, err := upg.Fds.Listen(context.Background(), "testListen", nil, "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("unable to listen: %v", err)
-	}
+	require.NoError(t, err)
 	server.Listener = listen
 	server.Start()
-	if err := upg.Ready(); err != nil {
-		t.Fatalf("unable to mark self as ready: %v", err)
-	}
+	require.NoError(t, upg.Ready())
 	return requests, responses, upg, server
 }
 

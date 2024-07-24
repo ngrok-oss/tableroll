@@ -2,11 +2,11 @@ package tableroll
 
 import (
 	"context"
-	"io/ioutil"
-	"os"
+	"io"
 	"testing"
 
 	"github.com/inconshreveable/log15"
+	"github.com/stretchr/testify/require"
 	"k8s.io/utils/clock"
 )
 
@@ -14,63 +14,51 @@ import (
 func TestConnectOwner(t *testing.T) {
 	l := log15.New()
 	ctx := context.Background()
-	tmpdir, err := ioutil.TempDir("", "tableroll_coord_test")
-	if err != nil {
-		panic(err)
-	}
-	defer os.RemoveAll(tmpdir)
+	tmpdir := tmpDir(t)
 
 	coord1 := newCoordinator(clock.RealClock{}, l, tmpdir, "1")
 	coord2 := newCoordinator(clock.RealClock{}, l, tmpdir, "2")
 
 	coord1l, err := coord1.Listen(ctx)
-	if err != nil {
-		t.Fatalf("Unable to listen: %v", err)
-	}
-	coord1.Lock(ctx)
-	coord1.BecomeOwner()
-	coord1.Unlock()
+	require.NoError(t, err)
+	require.NoError(t, coord1.Lock(ctx))
+	require.NoError(t, coord1.BecomeOwner())
+	require.NoError(t, coord1.Unlock())
 
 	connw, err := coord2.ConnectOwner(ctx)
-	if err != nil {
-		t.Fatalf("unable to connect to owner")
-	}
+	require.NoError(t, err)
 
+	connErr := make(chan error, 1)
 	go func() {
-		connw.Write([]byte("hello world"))
-		connw.Close()
+		defer close(connErr)
+		if _, err := connw.Write([]byte("hello world")); err != nil {
+			connErr <- err
+		}
+		if err := connw.Close(); err != nil {
+			connErr <- err
+		}
 	}()
 
 	connr, err := coord1l.Accept()
 	if err != nil {
 		t.Fatalf("acccept err: %v", err)
 	}
-	data, err := ioutil.ReadAll(connr)
-	if err != nil {
-		t.Fatalf("read err: %v", err)
-	}
-	if string(data) != "hello world" {
-		t.Fatalf("expected to read %q; got %q", "hello world", string(data))
-	}
+	data, err := io.ReadAll(connr)
+	require.NoError(t, err)
+	require.Equal(t, "hello world", string(data))
+	require.NoError(t, <-connErr)
 }
 
 // TestLockCoordinationDirCtxCancel tests that a call to `lockCoordinationDir` can be
 // canceled by canceling the passed in context.
 func TestLockCoordinationDirCtxCancel(t *testing.T) {
 	l := log15.New()
-	ctx := context.Background()
-	tmpdir, err := ioutil.TempDir("", "tableroll_coord_test")
-	if err != nil {
-		panic(err)
-	}
-	defer os.RemoveAll(tmpdir)
+	ctx := testCtx(t)
+	tmpdir := tmpDir(t)
 	coord1 := newCoordinator(clock.RealClock{}, l, tmpdir, "1")
 	coord2 := newCoordinator(clock.RealClock{}, l, tmpdir, "2")
-	err = coord1.Lock(ctx)
-	if err != nil {
-		t.Fatalf("Error getting coordination dir: %v", err)
-	}
-	defer coord1.Unlock()
+	require.NoError(t, coord1.Lock(ctx))
+	defer func() { require.NoError(t, coord1.Unlock()) }()
 
 	ctx2, cancel := context.WithCancel(ctx)
 	coordErr := make(chan error)
@@ -85,7 +73,7 @@ func TestLockCoordinationDirCtxCancel(t *testing.T) {
 	default:
 	}
 	cancel()
-	err = <-coordErr
+	err := <-coordErr
 	if err != context.Canceled {
 		t.Errorf("expected context cancel, got %v", err)
 	}
