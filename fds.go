@@ -93,8 +93,8 @@ type fd struct {
 	ID string `json:"id"`
 
 	// for conns/listeners, stored just for pretty-printing
-	Network string `json:"network,omitEmpty"`
-	Addr    string `json:"addr,omitEmpty"`
+	Network string `json:"network,omitempty"`
+	Addr    string `json:"addr,omitempty"`
 }
 
 func (f *fd) String() string {
