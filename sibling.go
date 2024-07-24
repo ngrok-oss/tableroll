@@ -11,9 +11,8 @@ import (
 )
 
 type sibling struct {
-	readyC chan struct{}
-	conn   *net.UnixConn
-	l      log15.Logger
+	conn *net.UnixConn
+	l    log15.Logger
 }
 
 func newSibling(l log15.Logger, conn *net.UnixConn) *sibling {

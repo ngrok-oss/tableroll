@@ -131,8 +131,6 @@ func (u *Upgrader) becomeOwner(ctx context.Context) (bool, error) {
 	return sess.hasOwner(), nil
 }
 
-var errClosed = errors.New("connection closed")
-
 func (u *Upgrader) serveUpgrades() {
 	for {
 		conn, err := u.upgradeSock.AcceptUnix()
