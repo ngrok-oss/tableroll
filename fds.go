@@ -2,6 +2,7 @@ package tableroll
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -9,7 +10,6 @@ import (
 	"syscall"
 
 	"github.com/inconshreveable/log15"
-	"github.com/pkg/errors"
 	"golang.org/x/sys/unix"
 )
 
@@ -87,6 +87,11 @@ func newFile(fd uintptr, name string) *file {
 type fd struct {
 	// The underlying file object
 	file *file
+
+	// used is set to true the first time this file is used.
+	// It's here to close inherited FDs which are unused in
+	// the new process automatically.
+	used bool
 
 	Kind fdKind `json:"kind"`
 	// ID is the id of this file, stored just for pretty-printing
@@ -170,12 +175,13 @@ func (f *Fds) Listen(ctx context.Context, id string, cfg *net.ListenConfig, netw
 		cfg = &net.ListenConfig{}
 	}
 
-	ln, err := f.listenerLocked(id)
+	ln, fd, err := f.listenerLocked(id)
 	if err != nil {
 		return nil, err
 	}
 	if ln != nil {
 		f.l.Debug("found existing listener in store", "listenerId", id, "network", network, "addr", addr)
+		fd.used = true
 		return ln, nil
 	}
 
@@ -185,13 +191,13 @@ func (f *Fds) Listen(ctx context.Context, id string, cfg *net.ListenConfig, netw
 
 	ln, err = cfg.Listen(ctx, network, addr)
 	if err != nil {
-		return nil, errors.Wrap(err, "can't create new listener")
+		return nil, fmt.Errorf("can't create new listener: %w", err)
 	}
 
 	fdLn, ok := ln.(Listener)
 	if !ok {
 		ln.Close()
-		return nil, errors.Errorf("%T doesn't implement tableroll.Listener", ln)
+		return nil, fmt.Errorf("%T doesn't implement tableroll.Listener", ln)
 	}
 
 	err = f.addListenerLocked(id, network, addr, fdLn)
@@ -214,11 +220,12 @@ func (f *Fds) ListenWith(id, network, addr string, listenerFunc func(network, ad
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	ln, err := f.listenerLocked(id)
+	ln, fd, err := f.listenerLocked(id)
 	if err != nil {
 		return nil, err
 	}
 	if ln != nil {
+		fd.used = true
 		return ln, nil
 	}
 	if f.locked {
@@ -231,7 +238,7 @@ func (f *Fds) ListenWith(id, network, addr string, listenerFunc func(network, ad
 	}
 	if _, ok := ln.(Listener); !ok {
 		ln.Close()
-		return nil, errors.Errorf("%T doesn't implement tableroll.Listener", ln)
+		return nil, fmt.Errorf("%T doesn't implement tableroll.Listener", ln)
 	}
 	if err := f.addListenerLocked(id, network, addr, ln.(Listener)); err != nil {
 		ln.Close()
@@ -248,20 +255,21 @@ func (f *Fds) Listener(id string) (net.Listener, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	return f.listenerLocked(id)
+	ln, _, err := f.listenerLocked(id)
+	return ln, err
 }
 
-func (f *Fds) listenerLocked(id string) (net.Listener, error) {
+func (f *Fds) listenerLocked(id string) (net.Listener, *fd, error) {
 	file, ok := f.fds[id]
 	if !ok || file.file == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	ln, err := net.FileListener(file.file.File)
 	if err != nil {
-		return nil, errors.Wrapf(err, "can't inherit listener %s", file.file)
+		return nil, nil, fmt.Errorf("can't inherit listener %s: %w", file.file, err)
 	}
-	return ln, nil
+	return ln, file, nil
 }
 
 type unlinkOnCloser interface {
@@ -302,7 +310,7 @@ func (f *Fds) DialWith(id, network, address string, dialFn func(network, address
 	fdConn, ok := newConn.(Conn)
 	if !ok {
 		newConn.Close()
-		return nil, errors.Errorf("%T doesn't implement tableroll.Conn", newConn)
+		return nil, fmt.Errorf("%T doesn't implement tableroll.Conn", newConn)
 	}
 
 	if err := f.addConnLocked(id, fdKindConn, network, address, fdConn); err != nil {
@@ -331,13 +339,14 @@ func (f *Fds) connLocked(id string) (net.Conn, error) {
 
 	conn, err := net.FileConn(file.file.File)
 	if err != nil {
-		return nil, errors.Wrapf(err, "can't inherit connection %s", file.file)
+		return nil, fmt.Errorf("can't inherit connection %s: %w", file.file, err)
 	}
 	return conn, nil
 }
 
 func (f *Fds) addConnLocked(id string, kind fdKind, network, addr string, conn syscall.Conn) error {
 	fdObj := &fd{
+		used:    true,
 		Kind:    kind,
 		ID:      id,
 		Network: network,
@@ -345,7 +354,7 @@ func (f *Fds) addConnLocked(id string, kind fdKind, network, addr string, conn s
 	}
 	file, err := dupConn(conn, fdObj.String())
 	if err != nil {
-		return errors.Wrapf(err, "can't dup listener %s %s", network, addr)
+		return fmt.Errorf("can't dup listener %s %s: %w", network, addr, err)
 	}
 	fdObj.file = file
 	f.fds[id] = fdObj
@@ -381,6 +390,7 @@ func (f *Fds) OpenFileWith(id string, name string, openFunc func(name string) (*
 	}
 
 	newFd := &fd{
+		used: true,
 		ID:   id,
 		Kind: fdKindFile,
 		file: dup,
@@ -413,7 +423,7 @@ func (f *Fds) Remove(id string) error {
 
 	item, ok := f.fds[id]
 	if !ok {
-		return errors.Errorf("no element in map with id %v", id)
+		return fmt.Errorf("no element in map with id %v", id)
 	}
 	delete(f.fds, id)
 	if item.file != nil {
@@ -449,6 +459,22 @@ func (f *Fds) copy() map[string]*fd {
 	return files
 }
 
+// closeUnused closes unused FDs. It should be called
+// while Fds is locked.
+func (f *Fds) closeUnused() error {
+	var errs []error
+	for name, fd := range f.fds {
+		if !fd.used {
+			err := fd.file.Close()
+			if err != nil {
+				errs = append(errs, fmt.Errorf("error closing %v: %w", name, err))
+			}
+			delete(f.fds, name)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func dupConn(conn syscall.Conn, name string) (*file, error) {
 	// Use SyscallConn instead of File to avoid making the original
 	// fd non-blocking.
@@ -463,7 +489,7 @@ func dupConn(conn syscall.Conn, name string) (*file, error) {
 		dup, duperr = dupFd(fd, name)
 	})
 	if err != nil {
-		return nil, errors.Wrap(err, "can't access fd")
+		return nil, fmt.Errorf("can't access fd: %w", err)
 	}
 	return dup, duperr
 }
@@ -471,7 +497,7 @@ func dupConn(conn syscall.Conn, name string) (*file, error) {
 func dupFd(fd uintptr, name string) (*file, error) {
 	dupfd, _, errno := unix.Syscall(unix.SYS_FCNTL, fd, unix.F_DUPFD_CLOEXEC, 0)
 	if errno != 0 {
-		return nil, errors.Wrap(errno, "can't dup fd using fcntl")
+		return nil, fmt.Errorf("can't dup fd using fcntl: %v", errno)
 	}
 
 	return newFile(dupfd, name), nil
