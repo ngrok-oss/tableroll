@@ -1,4 +1,4 @@
-module github.com/ngrok-oss/tableroll/v2
+module github.com/ngrok-oss/tableroll/v3
 
 require (
 	github.com/euank/filelock v0.0.0-20200318073246-6ea232a62104
