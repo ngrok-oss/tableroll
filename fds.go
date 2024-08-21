@@ -48,8 +48,8 @@ type fdKind string
 
 const (
 	fdKindListener fdKind = "listener"
-	fdKindConn            = "conn"
-	fdKindFile            = "file"
+	fdKindConn     fdKind = "conn"
+	fdKindFile     fdKind = "file"
 )
 
 // file works around the fact that it's not possible
@@ -93,8 +93,8 @@ type fd struct {
 	ID string `json:"id"`
 
 	// for conns/listeners, stored just for pretty-printing
-	Network string `json:"network,omitEmpty"`
-	Addr    string `json:"addr,omitEmpty"`
+	Network string `json:"network,omitempty"`
+	Addr    string `json:"addr,omitempty"`
 }
 
 func (f *fd) String() string {
@@ -447,19 +447,6 @@ func (f *Fds) copy() map[string]*fd {
 	}
 
 	return files
-}
-
-func unlinkUnixSocket(path string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-
-	if info.Mode()&os.ModeSocket == 0 {
-		return nil
-	}
-
-	return os.Remove(path)
 }
 
 func dupConn(conn syscall.Conn, name string) (*file, error) {

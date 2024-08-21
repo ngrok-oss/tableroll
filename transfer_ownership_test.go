@@ -2,28 +2,24 @@ package tableroll
 
 import (
 	"context"
-	"io/ioutil"
-	"os"
 	"testing"
 
 	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
+	"github.com/stretchr/testify/require"
 	"k8s.io/utils/clock"
 )
 
 func TestGetFilesCtxCancel(t *testing.T) {
 	ctx := context.Background()
 	l := log15.New()
-	tmpdir, err := ioutil.TempDir("", "tableroll_getfiles")
-	if err != nil {
-		panic(err)
-	}
-	defer os.RemoveAll(tmpdir)
+	tmpdir := tmpDir(t)
 	parent := newCoordinator(clock.RealClock{}, l, tmpdir, "1")
-	parent.Listen(ctx)
-	parent.Lock(ctx)
-	parent.BecomeOwner()
-	parent.Unlock()
+	_, err := parent.Listen(ctx)
+	require.NoError(t, err)
+	require.NoError(t, parent.Lock(ctx))
+	require.NoError(t, parent.BecomeOwner())
+	require.NoError(t, parent.Unlock())
 
 	newParent := newCoordinator(clock.RealClock{}, l, tmpdir, "2")
 

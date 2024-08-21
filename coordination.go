@@ -3,7 +3,6 @@ package tableroll
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"os"
 	"path/filepath"
@@ -52,7 +51,7 @@ func (c *coordinator) Listen(ctx context.Context) (*net.UnixListener, error) {
 }
 
 func touchFile(path string) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDONLY, 0755)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDONLY, 0o755)
 	f.Close()
 	return err
 }
@@ -96,7 +95,7 @@ func (c *coordinator) idFile() string {
 // It should only be called while the lock is held.
 func (c *coordinator) BecomeOwner() error {
 	c.l.Info("writing id to become owner", "id", c.id)
-	return ioutil.WriteFile(c.idFile(), []byte(c.id), 0755)
+	return os.WriteFile(c.idFile(), []byte(c.id), 0o755)
 }
 
 // Unlock unlocks the coordination id file
@@ -113,7 +112,7 @@ func (c *coordinator) Unlock() error {
 // It will return 'errNoOwner' if there isn't currently an owner.
 func (c *coordinator) GetOwnerID() (string, error) {
 	c.l.Info("discovering current owner")
-	data, err := ioutil.ReadFile(c.idFile())
+	data, err := os.ReadFile(c.idFile())
 	if err != nil {
 		return "", err
 	}
