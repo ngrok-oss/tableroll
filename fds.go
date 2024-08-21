@@ -175,13 +175,12 @@ func (f *Fds) Listen(ctx context.Context, id string, cfg *net.ListenConfig, netw
 		cfg = &net.ListenConfig{}
 	}
 
-	ln, fd, err := f.listenerLocked(id)
+	ln, err := f.listenerLocked(id)
 	if err != nil {
 		return nil, err
 	}
 	if ln != nil {
 		f.l.Debug("found existing listener in store", "listenerId", id, "network", network, "addr", addr)
-		fd.used = true
 		return ln, nil
 	}
 
@@ -220,12 +219,11 @@ func (f *Fds) ListenWith(id, network, addr string, listenerFunc func(network, ad
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	ln, fd, err := f.listenerLocked(id)
+	ln, err := f.listenerLocked(id)
 	if err != nil {
 		return nil, err
 	}
 	if ln != nil {
-		fd.used = true
 		return ln, nil
 	}
 	if f.locked {
@@ -255,21 +253,23 @@ func (f *Fds) Listener(id string) (net.Listener, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	ln, _, err := f.listenerLocked(id)
+	ln, err := f.listenerLocked(id)
 	return ln, err
 }
 
-func (f *Fds) listenerLocked(id string) (net.Listener, *fd, error) {
+func (f *Fds) listenerLocked(id string) (net.Listener, error) {
 	file, ok := f.fds[id]
 	if !ok || file.file == nil {
-		return nil, nil, nil
+		return nil, nil
 	}
 
 	ln, err := net.FileListener(file.file.File)
 	if err != nil {
-		return nil, nil, fmt.Errorf("can't inherit listener %s: %w", file.file, err)
+		return nil, fmt.Errorf("can't inherit listener %s: %w", file.file, err)
 	}
-	return ln, file, nil
+	// now that we've converted this into a go listener, assume it's used
+	file.used = true
+	return ln, nil
 }
 
 type unlinkOnCloser interface {
