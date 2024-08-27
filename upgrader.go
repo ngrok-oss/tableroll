@@ -238,6 +238,12 @@ func (u *Upgrader) Ready() error {
 	if err := u.state.transitionTo(upgraderStateOwner); err != nil {
 		return err
 	}
+
+	// Now cleanup all old FDs while holding the lock
+	u.Fds.lockMutations(errors.New("closing old listeners"))
+	defer u.Fds.unlockMutations()
+	_ = u.Fds.closeUnused()
+
 	return nil
 }
 
