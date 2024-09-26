@@ -131,9 +131,10 @@ type Fds struct {
 	l log15.Logger
 }
 
-func (f *Fds) String() string {
-	res := make([]string, 0, len(f.fds))
-	for _, fi := range f.fds {
+func (f *Fds) String() string { // XXX here?
+	fds := f.copy()
+	res := make([]string, 0, len(fds))
+	for _, fi := range fds {
 		res = append(res, fi.String())
 	}
 	return fmt.Sprintf("fds: %v", res)
