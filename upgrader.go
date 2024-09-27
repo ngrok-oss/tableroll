@@ -240,9 +240,9 @@ func (u *Upgrader) Ready() error {
 	}
 
 	// Now cleanup all old FDs while holding the lock
-	//u.Fds.lockMutations(errors.New("closing old listeners"))
-	// defer u.Fds.unlockMutations()
-	//_ = u.Fds.closeUnused()
+	u.Fds.lockMutations(ErrClosingListeners)
+	defer u.Fds.unlockMutations()
+	_ = u.Fds.closeUnused()
 
 	return nil
 }

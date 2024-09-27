@@ -29,7 +29,8 @@ var (
 	// This state is terminal.
 	// This error will be returned if an atttempt is made to mutate the file
 	// descriptor store after stopping the upgrader.
-	ErrUpgraderStopped = errors.New("the upgrader has been marked as stopped")
+	ErrUpgraderStopped  = errors.New("the upgrader has been marked as stopped")
+	ErrClosingListeners = errors.New("the upgrade completed, and listeners are being cleaned up")
 )
 
 // Listener can be shared between processes.
@@ -131,7 +132,7 @@ type Fds struct {
 	l log15.Logger
 }
 
-func (f *Fds) String() string { // XXX here?
+func (f *Fds) String() string {
 	fds := f.copy()
 	res := make([]string, 0, len(fds))
 	for _, fi := range fds {
@@ -463,6 +464,9 @@ func (f *Fds) copy() map[string]*fd {
 // closeUnused closes unused FDs. It should be called
 // while Fds is locked.
 func (f *Fds) closeUnused() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	var errs []error
 	for name, fd := range f.fds {
 		if !fd.used {
