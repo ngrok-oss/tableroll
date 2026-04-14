@@ -246,6 +246,18 @@ func TestFdPassMultipleTimes(t *testing.T) {
 	clock.Step(3 * time.Minute)
 	close(syncUpgraderTimeout)
 
+	// Wait for upg1 to finish handling the failed upgrade request
+	// and transition back to owner state before creating a new upgrader.
+	for {
+		upg1.stateLock.Lock()
+		state := upg1.state
+		upg1.stateLock.Unlock()
+		if state == upgraderStateOwner {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+
 	// now see that we get a working s3
 	server3Reqs, server3Msgs, upg3, s3 := createTestServer(t, clock, 3, coordDir)
 	defer upg3.Stop()
