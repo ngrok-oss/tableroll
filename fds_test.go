@@ -27,7 +27,7 @@ func TestFdsListen(t *testing.T) {
 		if ln == nil {
 			t.Fatal("Missing listener", addr)
 		}
-		ln.Close()
+		_ = ln.Close()
 	}
 }
 
@@ -41,7 +41,7 @@ func TestFdsListener(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tcp.Close()
+	defer func() { _ = tcp.Close() }()
 
 	temp := tmpDir(t)
 
@@ -55,25 +55,25 @@ func TestFdsListener(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unix.Close()
-	defer unix2.Close()
+	defer func() { _ = unix.Close() }()
+	defer func() { _ = unix2.Close() }()
 	unix2.(*net.UnixListener).SetUnlinkOnClose(true)
 
 	parent := newFds(l, nil)
 	if _, err := parent.ListenWith("1", addr.Network(), addr.String(), func(_, _ string) (net.Listener, error) { return tcp, nil }); err != nil {
 		t.Fatal("Can't add listener:", err)
 	}
-	tcp.Close()
+	_ = tcp.Close()
 
 	if _, err := parent.ListenWith("2", "unix", socketPath, func(_, _ string) (net.Listener, error) { return unix.(Listener), nil }); err != nil {
 		t.Fatal("Can't add listener:", err)
 	}
-	unix.Close()
+	_ = unix.Close()
 
 	if _, err := parent.ListenWith("3", "unix", socketPath, func(_, _ string) (net.Listener, error) { return unix2.(Listener), nil }); err != nil {
 		t.Fatal("Can't add listener:", err)
 	}
-	unix2.Close()
+	_ = unix2.Close()
 
 	if _, err := os.Stat(socketPath); err != nil {
 		t.Error("Unix.Close() unlinked socketPath:", err)
@@ -85,7 +85,7 @@ func TestFdsListener(t *testing.T) {
 	if ln == nil {
 		t.Fatal("Missing listener")
 	}
-	ln.Close()
+	_ = ln.Close()
 
 	require.NoError(t, child.Remove("2"))
 	if _, err := os.Stat(socketPath); err != nil {
@@ -95,7 +95,7 @@ func TestFdsListener(t *testing.T) {
 	ln, err = child.Listener("3")
 	require.NoError(t, err)
 	ln.(*net.UnixListener).SetUnlinkOnClose(true)
-	ln.Close()
+	_ = ln.Close()
 	if _, err := os.Stat(socketPath2); err == nil {
 		t.Errorf("expected socket should have been unlinked: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestFdsConn(t *testing.T) {
 	if err != nil {
 		t.Fatal("Can't add conn:", err)
 	}
-	unixConn.Close()
+	_ = unixConn.Close()
 	defer func() { _ = parent.Remove("1") }()
 
 	child := newFds(l, parent.copy())
@@ -124,7 +124,7 @@ func TestFdsConn(t *testing.T) {
 	if conn == nil {
 		t.Fatal("Missing conn")
 	}
-	conn.Close()
+	_ = conn.Close()
 }
 
 func TestFdsFile(t *testing.T) {
@@ -132,7 +132,7 @@ func TestFdsFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 
 	parent := newFds(l, nil)
 	if _, err := parent.OpenFileWith("test", "test", func(_ string) (*os.File, error) {
@@ -140,7 +140,7 @@ func TestFdsFile(t *testing.T) {
 	}); err != nil {
 		t.Fatal("Can't add file:", err)
 	}
-	w.Close()
+	_ = w.Close()
 	defer func() { require.NoError(t, parent.Remove("test")) }()
 
 	child := newFds(l, parent.copy())
@@ -151,7 +151,7 @@ func TestFdsFile(t *testing.T) {
 	if file == nil {
 		t.Fatal("Missing file")
 	}
-	file.Close()
+	_ = file.Close()
 }
 
 func TestFdsLock(t *testing.T) {

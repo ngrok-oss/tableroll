@@ -123,7 +123,7 @@ func (u *Upgrader) becomeOwner(ctx context.Context) (bool, error) {
 	u.session = sess
 	files, err := sess.getFiles(ctx)
 	if err != nil {
-		sess.Close()
+		_ = sess.Close()
 		return false, err
 	}
 	u.Fds = newFds(u.l, files)
@@ -258,13 +258,13 @@ func (u *Upgrader) UpgradeComplete() <-chan struct{} {
 func (u *Upgrader) Stop() {
 	u.mustTransitionTo(upgraderStateStopped)
 	if u.session != nil {
-		u.session.Close()
+		_ = u.session.Close()
 	}
 	u.stopOnce.Do(func() {
 		u.Fds.lockMutations(ErrUpgraderStopped)
 		// Interrupt any running Upgrade(), and
 		// prevent new upgrade from happening.
-		u.upgradeSock.Close()
+		_ = u.upgradeSock.Close()
 		select {
 		case <-u.upgradeCompleteC:
 		default:

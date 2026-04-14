@@ -27,7 +27,7 @@ func loopbackTCPAddr(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("could not listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	return ln.Addr().String()
 }
 
@@ -388,7 +388,7 @@ func main2() int {
 			if err != nil {
 				panic(err)
 			}
-			conn.Close()
+			_ = conn.Close()
 			fmt.Println(MsgServedRequest)
 		}
 	}()
@@ -439,13 +439,13 @@ func listenOnManySockets() int {
 
 	lns, toClose := lns[0:len(lns)-10], lns[len(lns)-10:]
 	for _, ln := range toClose {
-		ln.Close()
+		_ = ln.Close()
 	}
 
 	fmt.Println(MsgReady)
 	<-upg.UpgradeComplete()
 	for _, ln := range lns {
-		ln.Close()
+		_ = ln.Close()
 	}
 	// free up ids to free ip FDs for other tests
 	for _, id := range ids {

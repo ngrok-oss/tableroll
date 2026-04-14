@@ -199,13 +199,13 @@ func (f *Fds) Listen(ctx context.Context, id string, cfg *net.ListenConfig, netw
 
 	fdLn, ok := ln.(Listener)
 	if !ok {
-		ln.Close()
+		_ = ln.Close()
 		return nil, fmt.Errorf("%T doesn't implement tableroll.Listener", ln)
 	}
 
 	err = f.addListenerLocked(id, network, addr, fdLn)
 	if err != nil {
-		fdLn.Close()
+		_ = fdLn.Close()
 		return nil, err
 	}
 
@@ -239,11 +239,11 @@ func (f *Fds) ListenWith(id, network, addr string, listenerFunc func(network, ad
 		return nil, err
 	}
 	if _, ok := ln.(Listener); !ok {
-		ln.Close()
+		_ = ln.Close()
 		return nil, fmt.Errorf("%T doesn't implement tableroll.Listener", ln)
 	}
 	if err := f.addListenerLocked(id, network, addr, ln.(Listener)); err != nil {
-		ln.Close()
+		_ = ln.Close()
 		return nil, err
 	}
 	return ln, nil
@@ -313,12 +313,12 @@ func (f *Fds) DialWith(id, network, address string, dialFn func(network, address
 	}
 	fdConn, ok := newConn.(Conn)
 	if !ok {
-		newConn.Close()
+		_ = newConn.Close()
 		return nil, fmt.Errorf("%T doesn't implement tableroll.Conn", newConn)
 	}
 
 	if err := f.addConnLocked(id, fdKindConn, network, address, fdConn); err != nil {
-		newConn.Close()
+		_ = newConn.Close()
 		return nil, err
 	}
 	return newConn, nil
@@ -389,7 +389,7 @@ func (f *Fds) OpenFileWith(id string, name string, openFunc func(name string) (*
 
 	dup, err := dupFile(newFi, id)
 	if err != nil {
-		newFi.Close()
+		_ = newFi.Close()
 		return nil, err
 	}
 

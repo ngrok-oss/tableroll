@@ -79,7 +79,7 @@ func TestUpgradeHandoff(t *testing.T) {
 	defer upg2.Stop()
 	defer s2.Close()
 	<-upg1.UpgradeComplete()
-	s1.Listener.Close()
+	_ = s1.Listener.Close()
 	// make sure the existing tcp connections aren't re-used anymore
 	c1t.CloseIdleConnections()
 	go func() {
@@ -173,7 +173,7 @@ func TestPIDReuse(t *testing.T) {
 	defer s2.Close()
 	<-upg1.UpgradeComplete()
 	// Shut down server 1, have a new server reuse it
-	s1.Listener.Close()
+	_ = s1.Listener.Close()
 	c1t.CloseIdleConnections()
 	upg1.Stop()
 
@@ -251,7 +251,7 @@ func TestFdPassMultipleTimes(t *testing.T) {
 	defer upg3.Stop()
 	defer s3.Close()
 	<-upg1.UpgradeComplete()
-	s1.Listener.Close()
+	_ = s1.Listener.Close()
 	c1t.CloseIdleConnections()
 
 	go func() {

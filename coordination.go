@@ -52,8 +52,10 @@ func (c *coordinator) Listen(ctx context.Context) (*net.UnixListener, error) {
 
 func touchFile(path string) error {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDONLY, 0o755)
-	f.Close()
-	return err
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }
 
 // Lock takes an exclusive lock on the given coordination directory.  If the

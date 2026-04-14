@@ -41,7 +41,7 @@ func (s *sibling) giveFDs(readyTimeoutC <-chan time.Time, passedFiles map[string
 	if err != nil {
 		return errors.Wrapf(err, "could not convert sibling connection to file")
 	}
-	defer connFile.Close()
+	defer func() { _ = connFile.Close() }()
 
 	functionEnd := make(chan struct{})
 	defer close(functionEnd)
@@ -54,8 +54,8 @@ func (s *sibling) giveFDs(readyTimeoutC <-chan time.Time, passedFiles map[string
 			default:
 				s.l.Info("timed out, closing file and connection")
 				// fail reads/writes on timeout
-				s.conn.Close()
-				connFile.Close()
+				_ = s.conn.Close()
+				_ = connFile.Close()
 			}
 		}
 	}()
