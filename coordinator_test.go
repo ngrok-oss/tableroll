@@ -5,14 +5,15 @@ import (
 	"io"
 	"testing"
 
-	"github.com/inconshreveable/log15"
+	"log/slog"
+
 	"github.com/stretchr/testify/require"
 	"k8s.io/utils/clock"
 )
 
 // TestConnectOwner is a happy-path test of using the coordinator
 func TestConnectOwner(t *testing.T) {
-	l := log15.New()
+	l := slog.Default()
 	ctx := context.Background()
 	tmpdir := tmpDir(t)
 
@@ -52,7 +53,7 @@ func TestConnectOwner(t *testing.T) {
 // TestLockCoordinationDirCtxCancel tests that a call to `lockCoordinationDir` can be
 // canceled by canceling the passed in context.
 func TestLockCoordinationDirCtxCancel(t *testing.T) {
-	l := log15.New()
+	l := slog.Default()
 	ctx := testCtx(t)
 	tmpdir := tmpDir(t)
 	coord1 := newCoordinator(clock.RealClock{}, l, tmpdir, "1")

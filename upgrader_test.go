@@ -13,13 +13,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/inconshreveable/log15"
+	"log/slog"
+
 	"github.com/stretchr/testify/require"
 	"k8s.io/utils/clock"
 	fakeclock "k8s.io/utils/clock/testing"
 )
 
-var l = log15.New()
+var l = slog.Default()
 
 // TestGCingUpgradeHandoff tests that the upgradehandoff test works even with
 // gc running more frequently.
@@ -286,11 +287,11 @@ func TestUpgradeTimeout(t *testing.T) {
 	coordDir := tmpDir(t)
 
 	// If upg1 times out serving the upgrade, upg2 should not be able to think it's the owner
-	upg1, err := newUpgrader(ctx, clock, coordDir, "1", WithLogger(l.New("pid", "1")), WithUpgradeTimeout(30*time.Millisecond))
+	upg1, err := newUpgrader(ctx, clock, coordDir, "1", WithLogger(l.With("pid", "1")), WithUpgradeTimeout(30*time.Millisecond))
 	require.NoError(t, err)
 	require.NoError(t, upg1.Ready())
 
-	upg2, err := newUpgrader(ctx, clock, coordDir, "2", WithLogger(l.New("pid", "2")))
+	upg2, err := newUpgrader(ctx, clock, coordDir, "2", WithLogger(l.With("pid", "2")))
 	require.NoError(t, err)
 	// upg1 serve timeout
 	for !clock.HasWaiters() {
@@ -315,14 +316,14 @@ func TestFailedUpgradeListen(t *testing.T) {
 	ctx := context.Background()
 	coordDir := tmpDir(t)
 
-	upg1, err := newUpgrader(ctx, clock.RealClock{}, coordDir, "1", WithLogger(l.New("pid", "1")))
+	upg1, err := newUpgrader(ctx, clock.RealClock{}, coordDir, "1", WithLogger(l.With("pid", "1")))
 	require.Nil(t, err)
 	ln, err := upg1.Fds.Listen(ctx, "id", &net.ListenConfig{}, "tcp", "127.0.0.1:0")
 	require.Nil(t, err)
 	require.NoError(t, upg1.Ready())
 
 	// fail an upgrade
-	upg2, err := newUpgrader(ctx, clock.RealClock{}, coordDir, "2", WithLogger(l.New("pid", "2")))
+	upg2, err := newUpgrader(ctx, clock.RealClock{}, coordDir, "2", WithLogger(l.With("pid", "2")))
 	require.Nil(t, err)
 	upg2.Stop()
 

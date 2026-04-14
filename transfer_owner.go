@@ -3,11 +3,11 @@ package tableroll
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"sync"
 
-	"github.com/inconshreveable/log15"
-	"github.com/ngrok-oss/tableroll/v3/internal/proto"
+	"github.com/ngrok-oss/tableroll/v4/internal/proto"
 	"github.com/pkg/errors"
 )
 
@@ -16,10 +16,10 @@ type upgradeSession struct {
 	wr           *net.UnixConn
 	coordinator  *coordinator
 	ownerVersion uint32
-	l            log15.Logger
+	l            *slog.Logger
 }
 
-func connectToCurrentOwner(ctx context.Context, l log15.Logger, coord *coordinator) (*upgradeSession, error) {
+func connectToCurrentOwner(ctx context.Context, l *slog.Logger, coord *coordinator) (*upgradeSession, error) {
 	err := coord.Lock(ctx)
 	if err != nil {
 		return nil, err

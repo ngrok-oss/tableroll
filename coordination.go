@@ -3,13 +3,13 @@ package tableroll
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/euank/filelock"
-	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
 	"k8s.io/utils/clock"
 )
@@ -29,14 +29,14 @@ type coordinator struct {
 	lock *filelock.FileLock
 	dir  string
 	id   string
-	l    log15.Logger
+	l    *slog.Logger
 
 	// mocks
 	clock clock.Clock
 }
 
-func newCoordinator(clock clock.Clock, l log15.Logger, dir string, id string) *coordinator {
-	l = l.New("dir", dir)
+func newCoordinator(clock clock.Clock, l *slog.Logger, dir string, id string) *coordinator {
+	l = l.With("dir", dir)
 	coord := &coordinator{dir: dir, l: l, clock: clock, id: id}
 	return coord
 }

@@ -2,20 +2,20 @@ package tableroll
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"time"
 
-	"github.com/inconshreveable/log15"
-	"github.com/ngrok-oss/tableroll/v3/internal/proto"
+	"github.com/ngrok-oss/tableroll/v4/internal/proto"
 	"github.com/pkg/errors"
 )
 
 type sibling struct {
 	conn *net.UnixConn
-	l    log15.Logger
+	l    *slog.Logger
 }
 
-func newSibling(l log15.Logger, conn *net.UnixConn) *sibling {
+func newSibling(l *slog.Logger, conn *net.UnixConn) *sibling {
 	return &sibling{
 		conn: conn,
 		l:    l,

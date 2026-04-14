@@ -9,7 +9,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/inconshreveable/log15"
+	"log/slog"
 	"golang.org/x/sys/unix"
 )
 
@@ -129,7 +129,7 @@ type Fds struct {
 	locked       bool
 	lockedReason error
 
-	l log15.Logger
+	l *slog.Logger
 }
 
 func (f *Fds) String() string {
@@ -141,7 +141,7 @@ func (f *Fds) String() string {
 	return fmt.Sprintf("fds: %v", res)
 }
 
-func newFds(l log15.Logger, inherited map[string]*fd) *Fds {
+func newFds(l *slog.Logger, inherited map[string]*fd) *Fds {
 	if inherited == nil {
 		inherited = make(map[string]*fd)
 	}
