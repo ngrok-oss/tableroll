@@ -40,7 +40,7 @@ func TestGCingUpgradeHandoff(t *testing.T) {
 		}
 	}()
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		time.Sleep(10 * time.Nanosecond)
 		TestUpgradeHandoff(t)
 	}

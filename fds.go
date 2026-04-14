@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"sync"
 	"syscall"
 
-	"log/slog"
 	"golang.org/x/sys/unix"
+	"log/slog"
 )
 
 var (
@@ -454,9 +455,7 @@ func (f *Fds) copy() map[string]*fd {
 	defer f.mu.Unlock()
 
 	files := make(map[string]*fd, len(f.fds))
-	for key, file := range f.fds {
-		files[key] = file
-	}
+	maps.Copy(files, f.fds)
 
 	return files
 }

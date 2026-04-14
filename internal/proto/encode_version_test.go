@@ -8,7 +8,7 @@ import (
 func TestVersionEncodeDecode(t *testing.T) {
 	// test the first 10k versions are both unique and roundtrip
 	unique := map[string]bool{}
-	for i := uint32(0); i < 10000; i++ {
+	for i := range uint32(10000) {
 		val := encodeVersion(i)
 		if unique[string(val)] {
 			t.Errorf("version %v did not uniquely encode", i)
