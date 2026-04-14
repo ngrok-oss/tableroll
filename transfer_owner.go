@@ -7,8 +7,9 @@ import (
 	"net"
 	"sync"
 
-	"github.com/ngrok-oss/tableroll/v4/internal/proto"
 	"github.com/pkg/errors"
+
+	"github.com/ngrok-oss/tableroll/v4/internal/proto"
 )
 
 type upgradeSession struct {
