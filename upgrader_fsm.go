@@ -1,8 +1,9 @@
 package tableroll
 
-import "slices"
-
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // upgraderState represents a small finite state machine. It has the following transitions:
 // ∅                     → CheckingOwner

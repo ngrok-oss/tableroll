@@ -10,8 +10,9 @@ import (
 	"sync"
 	"syscall"
 
-	"golang.org/x/sys/unix"
 	"log/slog"
+
+	"golang.org/x/sys/unix"
 )
 
 var (
