@@ -1,5 +1,7 @@
 module github.com/ngrok-oss/tableroll/v3
 
+go 1.26
+
 require (
 	github.com/euank/filelock v0.0.0-20200318073246-6ea232a62104
 	github.com/inconshreveable/log15 v0.0.0-20180818164646-67afb5ed74ec
@@ -17,5 +19,3 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c // indirect
 )
-
-go 1.21
