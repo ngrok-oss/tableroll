@@ -301,10 +301,12 @@ func TestUpgradeTimeout(t *testing.T) {
 	// If upg1 times out serving the upgrade, upg2 should not be able to think it's the owner
 	upg1, err := newUpgrader(ctx, clock, coordDir, "1", WithLogger(l.With("pid", "1")), WithUpgradeTimeout(30*time.Millisecond))
 	require.NoError(t, err)
+	defer upg1.Stop()
 	require.NoError(t, upg1.Ready())
 
 	upg2, err := newUpgrader(ctx, clock, coordDir, "2", WithLogger(l.With("pid", "2")))
 	require.NoError(t, err)
+	defer upg2.Stop()
 	// upg1 serve timeout
 	for !clock.HasWaiters() {
 		time.Sleep(1 * time.Millisecond)

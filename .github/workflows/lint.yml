@@ -20,13 +20,8 @@ jobs:
       - uses: HatsuneMiku3939/direnv-action@68bdc19f46a32f049a01c2ea233fe7ca017e8840 # v1
       - name: direnv allow
         run: direnv allow .
-      - name: Run goimports
-        shell: bash
-        run: |
-          shopt -s globstar
-          direnv exec . goimports -format-only -w -local github.com/ngrok-oss/tableroll **/*.go
       - name: Lint
-        run: direnv exec . golangci-lint run .
+        run: direnv exec . make lint
       - name: Check diff
         shell: bash
         run: git diff --exit-code
