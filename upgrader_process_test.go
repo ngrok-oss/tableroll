@@ -170,9 +170,15 @@ func TestUnixMultiProcessUpgrade(t *testing.T) {
 		stdoutn, errCn, exitCn := runHelper(ctx, tmpdir, "main2", "")
 
 		// process n-1 should exit
-		exit := <-prevExit
-		if exit != 0 {
-			t.Fatalf("expected 0 exit: %v", exit)
+		select {
+		case exit := <-prevExit:
+			if exit != 0 {
+				t.Fatalf("expected 0 exit: %v", exit)
+			}
+		case err := <-errCn:
+			t.Fatalf("unexpected err from new process: %v", err)
+		case <-ctx.Done():
+			t.Fatal("timed out waiting for previous process to exit")
 		}
 
 		// process 2 should be ready
@@ -271,7 +277,7 @@ func runHelper(ctx context.Context, dir string, funcName string, addr string) (<
 	}...)
 
 	stdoutChan := make(chan string, 1)
-	errorChan := make(chan error, 1)
+	errorChan := make(chan error, 3)
 	exitChan := make(chan int, 1)
 
 	stdoutScanner := bufio.NewScanner(stdout)
@@ -294,8 +300,14 @@ func runHelper(ctx context.Context, dir string, funcName string, addr string) (<
 		}
 		if err != nil {
 			errorChan <- err
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				exitChan <- exitErr.ExitCode()
+			} else {
+				exitChan <- 1
+			}
+		} else {
+			exitChan <- 0
 		}
-		exitChan <- 0
 		close(exitChan)
 	}()
 
