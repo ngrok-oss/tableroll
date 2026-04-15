@@ -1,6 +1,9 @@
 package tableroll
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // upgraderState represents a small finite state machine. It has the following transitions:
 // ∅                     → CheckingOwner
@@ -58,10 +61,8 @@ var validTransitions = map[upgraderState][]upgraderState{
 func (u *upgraderState) canTransitionTo(state upgraderState) error {
 	validTargets := validTransitions[*u]
 
-	for _, target := range validTargets {
-		if target == state {
-			return nil
-		}
+	if slices.Contains(validTargets, state) {
+		return nil
 	}
 	return fmt.Errorf("unable to transition from %s to %s", *u, state)
 }

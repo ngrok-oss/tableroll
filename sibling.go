@@ -2,20 +2,21 @@ package tableroll
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"time"
 
-	"github.com/inconshreveable/log15"
-	"github.com/ngrok-oss/tableroll/v3/internal/proto"
 	"github.com/pkg/errors"
+
+	"github.com/ngrok-oss/tableroll/v4/internal/proto"
 )
 
 type sibling struct {
 	conn *net.UnixConn
-	l    log15.Logger
+	l    *slog.Logger
 }
 
-func newSibling(l log15.Logger, conn *net.UnixConn) *sibling {
+func newSibling(l *slog.Logger, conn *net.UnixConn) *sibling {
 	return &sibling{
 		conn: conn,
 		l:    l,
@@ -41,7 +42,7 @@ func (s *sibling) giveFDs(readyTimeoutC <-chan time.Time, passedFiles map[string
 	if err != nil {
 		return errors.Wrapf(err, "could not convert sibling connection to file")
 	}
-	defer connFile.Close()
+	defer func() { _ = connFile.Close() }()
 
 	functionEnd := make(chan struct{})
 	defer close(functionEnd)
@@ -54,8 +55,8 @@ func (s *sibling) giveFDs(readyTimeoutC <-chan time.Time, passedFiles map[string
 			default:
 				s.l.Info("timed out, closing file and connection")
 				// fail reads/writes on timeout
-				s.conn.Close()
-				connFile.Close()
+				_ = s.conn.Close()
+				_ = connFile.Close()
 			}
 		}
 	}()

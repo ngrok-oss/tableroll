@@ -42,19 +42,19 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"time"
 
-	"github.com/inconshreveable/log15"
-	"github.com/ngrok-oss/tableroll/v3"
+	"github.com/ngrok-oss/tableroll/v4"
 )
 
 func main() {
 	ctx := context.Background()
-	logger := log15.New()
+	logger := slog.Default()
 	if err := os.MkdirAll("/tmp/testroll", 0700); err != nil {
 		log.Fatalf("can't create coordination dir: %v", err)
 	}

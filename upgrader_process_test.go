@@ -27,7 +27,7 @@ func loopbackTCPAddr(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("could not listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	return ln.Addr().String()
 }
 
@@ -165,7 +165,7 @@ func TestUnixMultiProcessUpgrade(t *testing.T) {
 
 	prevExit := exitC
 	// now pass fds through 10 more processes
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		// Now pass fds to process n
 		stdoutn, errCn, exitCn := runHelper(ctx, tmpdir, "main2", "")
 
@@ -342,7 +342,7 @@ func main1() int {
 	server := &http.Server{
 		Handler: http.HandlerFunc(func(r http.ResponseWriter, req *http.Request) {
 			fmt.Println(MsgServedRequest)
-			_, err := r.Write([]byte(fmt.Sprintf("hello from %v!\n", os.Getpid())))
+			_, err := r.Write(fmt.Appendf(nil, "hello from %v!\n", os.Getpid()))
 			if err != nil {
 				panic(err)
 			}
@@ -388,7 +388,7 @@ func main2() int {
 			if err != nil {
 				panic(err)
 			}
-			conn.Close()
+			_ = conn.Close()
 			fmt.Println(MsgServedRequest)
 		}
 	}()
@@ -427,7 +427,7 @@ func listenOnManySockets() int {
 	lns := []net.Listener{}
 	ids := []string{}
 	var i int
-	for i = 0; i < 600; i++ {
+	for i = range 600 {
 		id := fmt.Sprintf("ln-%v", i)
 		ln, err := upg.Fds.ListenWith(id, "tcp", "127.0.0.1:0", net.Listen)
 		if err != nil {
@@ -439,13 +439,13 @@ func listenOnManySockets() int {
 
 	lns, toClose := lns[0:len(lns)-10], lns[len(lns)-10:]
 	for _, ln := range toClose {
-		ln.Close()
+		_ = ln.Close()
 	}
 
 	fmt.Println(MsgReady)
 	<-upg.UpgradeComplete()
 	for _, ln := range lns {
-		ln.Close()
+		_ = ln.Close()
 	}
 	// free up ids to free ip FDs for other tests
 	for _, id := range ids {

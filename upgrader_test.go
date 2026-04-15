@@ -13,13 +13,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/inconshreveable/log15"
+	"log/slog"
+
 	"github.com/stretchr/testify/require"
 	"k8s.io/utils/clock"
 	fakeclock "k8s.io/utils/clock/testing"
 )
 
-var l = log15.New()
+var l = slog.Default()
 
 // TestGCingUpgradeHandoff tests that the upgradehandoff test works even with
 // gc running more frequently.
@@ -39,7 +40,7 @@ func TestGCingUpgradeHandoff(t *testing.T) {
 		}
 	}()
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		time.Sleep(10 * time.Nanosecond)
 		TestUpgradeHandoff(t)
 	}
@@ -78,7 +79,7 @@ func TestUpgradeHandoff(t *testing.T) {
 	defer upg2.Stop()
 	defer s2.Close()
 	<-upg1.UpgradeComplete()
-	s1.Listener.Close()
+	_ = s1.Listener.Close()
 	// make sure the existing tcp connections aren't re-used anymore
 	c1t.CloseIdleConnections()
 	go func() {
@@ -172,7 +173,7 @@ func TestPIDReuse(t *testing.T) {
 	defer s2.Close()
 	<-upg1.UpgradeComplete()
 	// Shut down server 1, have a new server reuse it
-	s1.Listener.Close()
+	_ = s1.Listener.Close()
 	c1t.CloseIdleConnections()
 	upg1.Stop()
 
@@ -245,12 +246,24 @@ func TestFdPassMultipleTimes(t *testing.T) {
 	clock.Step(3 * time.Minute)
 	close(syncUpgraderTimeout)
 
+	// Wait for upg1 to finish handling the failed upgrade request
+	// and transition back to owner state before creating a new upgrader.
+	for {
+		upg1.stateLock.Lock()
+		state := upg1.state
+		upg1.stateLock.Unlock()
+		if state == upgraderStateOwner {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+
 	// now see that we get a working s3
 	server3Reqs, server3Msgs, upg3, s3 := createTestServer(t, clock, 3, coordDir)
 	defer upg3.Stop()
 	defer s3.Close()
 	<-upg1.UpgradeComplete()
-	s1.Listener.Close()
+	_ = s1.Listener.Close()
 	c1t.CloseIdleConnections()
 
 	go func() {
@@ -286,11 +299,11 @@ func TestUpgradeTimeout(t *testing.T) {
 	coordDir := tmpDir(t)
 
 	// If upg1 times out serving the upgrade, upg2 should not be able to think it's the owner
-	upg1, err := newUpgrader(ctx, clock, coordDir, "1", WithLogger(l.New("pid", "1")), WithUpgradeTimeout(30*time.Millisecond))
+	upg1, err := newUpgrader(ctx, clock, coordDir, "1", WithLogger(l.With("pid", "1")), WithUpgradeTimeout(30*time.Millisecond))
 	require.NoError(t, err)
 	require.NoError(t, upg1.Ready())
 
-	upg2, err := newUpgrader(ctx, clock, coordDir, "2", WithLogger(l.New("pid", "2")))
+	upg2, err := newUpgrader(ctx, clock, coordDir, "2", WithLogger(l.With("pid", "2")))
 	require.NoError(t, err)
 	// upg1 serve timeout
 	for !clock.HasWaiters() {
@@ -315,14 +328,14 @@ func TestFailedUpgradeListen(t *testing.T) {
 	ctx := context.Background()
 	coordDir := tmpDir(t)
 
-	upg1, err := newUpgrader(ctx, clock.RealClock{}, coordDir, "1", WithLogger(l.New("pid", "1")))
+	upg1, err := newUpgrader(ctx, clock.RealClock{}, coordDir, "1", WithLogger(l.With("pid", "1")))
 	require.Nil(t, err)
 	ln, err := upg1.Fds.Listen(ctx, "id", &net.ListenConfig{}, "tcp", "127.0.0.1:0")
 	require.Nil(t, err)
 	require.NoError(t, upg1.Ready())
 
 	// fail an upgrade
-	upg2, err := newUpgrader(ctx, clock.RealClock{}, coordDir, "2", WithLogger(l.New("pid", "2")))
+	upg2, err := newUpgrader(ctx, clock.RealClock{}, coordDir, "2", WithLogger(l.With("pid", "2")))
 	require.Nil(t, err)
 	upg2.Stop()
 

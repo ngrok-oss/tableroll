@@ -3,12 +3,13 @@ package tableroll
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"sync"
 
-	"github.com/inconshreveable/log15"
-	"github.com/ngrok-oss/tableroll/v3/internal/proto"
 	"github.com/pkg/errors"
+
+	"github.com/ngrok-oss/tableroll/v4/internal/proto"
 )
 
 type upgradeSession struct {
@@ -16,10 +17,10 @@ type upgradeSession struct {
 	wr           *net.UnixConn
 	coordinator  *coordinator
 	ownerVersion uint32
-	l            log15.Logger
+	l            *slog.Logger
 }
 
-func connectToCurrentOwner(ctx context.Context, l log15.Logger, coord *coordinator) (*upgradeSession, error) {
+func connectToCurrentOwner(ctx context.Context, l *slog.Logger, coord *coordinator) (*upgradeSession, error) {
 	err := coord.Lock(ctx)
 	if err != nil {
 		return nil, err
@@ -36,7 +37,7 @@ func connectToCurrentOwner(ctx context.Context, l log15.Logger, coord *coordinat
 		return sess, nil
 	}
 	if err != nil {
-		sess.Close()
+		_ = sess.Close()
 		return nil, err
 	}
 	sess.wr = sock
@@ -62,7 +63,7 @@ func (s *upgradeSession) getFiles(ctx context.Context) (map[string]*fd, error) {
 	if err != nil {
 		return nil, errors.Wrapf(err, "could not convert sibling connection to file")
 	}
-	defer sockFile.Close()
+	defer func() { _ = sockFile.Close() }()
 
 	functionEnd := make(chan struct{})
 	go func() {
@@ -77,7 +78,7 @@ func (s *upgradeSession) getFiles(ctx context.Context) (map[string]*fd, error) {
 			default:
 			}
 			// if there was a context error, close the socket to cause any pending reads/writes to fail
-			s.Close()
+			_ = s.Close()
 		}
 	}()
 	defer close(functionEnd)
@@ -133,7 +134,7 @@ func (s *upgradeSession) getFiles(ctx context.Context) (map[string]*fd, error) {
 }
 
 func (s *upgradeSession) readyHandshake() error {
-	defer s.wr.Close()
+	defer func() { _ = s.wr.Close() }()
 	if s.ownerVersion == 0 {
 		s.l.Info("performing v0 ready handshake")
 		if _, err := s.wr.Write([]byte{proto.V0NotifyReady}); err != nil {
@@ -188,7 +189,7 @@ func (s *upgradeSession) Close() error {
 	var err error
 	s.closeOnce.Do(func() {
 		if s.wr != nil {
-			s.wr.Close()
+			_ = s.wr.Close()
 		}
 		err = s.coordinator.Unlock()
 	})

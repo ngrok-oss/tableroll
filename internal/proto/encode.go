@@ -15,7 +15,7 @@ import (
 // A version is included via a v0 compatible hack since v0 did not include the
 // version. Specifically, the version is encoded as whitespace prefixing the
 // json data.
-func WriteVersionedJSONBlob(dst io.Writer, obj interface{}, version uint32) error {
+func WriteVersionedJSONBlob(dst io.Writer, obj any, version uint32) error {
 	versionPrefix := encodeVersion(version)
 
 	var jsonBlob bytes.Buffer
@@ -40,14 +40,14 @@ func WriteVersionedJSONBlob(dst io.Writer, obj interface{}, version uint32) erro
 }
 
 // WriteJSONBlob writes a length-prefixed json blob.
-func WriteJSONBlob(dst io.Writer, obj interface{}) error {
+func WriteJSONBlob(dst io.Writer, obj any) error {
 	return WriteVersionedJSONBlob(dst, obj, 0)
 }
 
 // ReadVersionedJSONBlob reads a JSON blob from the given writer. If the blob
 // was written with WriteVersionedJSONBlob, it determines the version and
 // returns it.
-func ReadVersionedJSONBlob(src io.Reader, obj interface{}) (uint32, error) {
+func ReadVersionedJSONBlob(src io.Reader, obj any) (uint32, error) {
 	var jsonLen int32
 	if err := binary.Read(src, binary.BigEndian, &jsonLen); err != nil {
 		return 0, errors.Wrap(err, "protocol error: could not read length of json")
@@ -61,7 +61,7 @@ func ReadVersionedJSONBlob(src io.Reader, obj interface{}) (uint32, error) {
 		return 0, errors.Wrapf(err, "unable to read expected meta json length (expected %v, got (%v, %v))", jsonLen, n, err)
 	}
 	var prefix []byte
-	for i := 0; i < len(data); i++ {
+	for i := range data {
 		if !isJSONIgnorableWhitespace(data[i]) {
 			prefix = data[0:i]
 			break
@@ -79,7 +79,7 @@ func ReadVersionedJSONBlob(src io.Reader, obj interface{}) (uint32, error) {
 }
 
 // ReadJSONBlob reads a length-prefixed json blob written by WriteJSONBlob.
-func ReadJSONBlob(src io.Reader, obj interface{}) error {
+func ReadJSONBlob(src io.Reader, obj any) error {
 	_, err := ReadVersionedJSONBlob(src, obj)
 	return err
 }

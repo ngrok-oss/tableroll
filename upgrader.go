@@ -3,12 +3,12 @@ package tableroll
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
 	"k8s.io/utils/clock"
 )
@@ -36,7 +36,7 @@ type Upgrader struct {
 	// This also occurs when `Stop` is called.
 	upgradeCompleteC chan struct{}
 
-	l log15.Logger
+	l *slog.Logger
 
 	Fds *Fds
 
@@ -62,7 +62,7 @@ func WithUpgradeTimeout(t time.Duration) Option {
 
 // WithLogger configures the logger to use for tableroll operations.
 // By default, nothing will be logged.
-func WithLogger(l log15.Logger) Option {
+func WithLogger(l *slog.Logger) Option {
 	return func(u *Upgrader) {
 		u.l = l
 	}
@@ -85,8 +85,7 @@ func New(ctx context.Context, coordinationDir string, id string, opts ...Option)
 }
 
 func newUpgrader(ctx context.Context, clock clock.Clock, coordinationDir string, id string, opts ...Option) (*Upgrader, error) {
-	noopLogger := log15.New()
-	noopLogger.SetHandler(log15.DiscardHandler())
+	noopLogger := slog.New(slog.DiscardHandler)
 	u := &Upgrader{
 		upgradeTimeout:   DefaultUpgradeTimeout,
 		state:            upgraderStateCheckingOwner,
@@ -124,7 +123,7 @@ func (u *Upgrader) becomeOwner(ctx context.Context) (bool, error) {
 	u.session = sess
 	files, err := sess.getFiles(ctx)
 	if err != nil {
-		sess.Close()
+		_ = sess.Close()
 		return false, err
 	}
 	u.Fds = newFds(u.l, files)
@@ -259,13 +258,13 @@ func (u *Upgrader) UpgradeComplete() <-chan struct{} {
 func (u *Upgrader) Stop() {
 	u.mustTransitionTo(upgraderStateStopped)
 	if u.session != nil {
-		u.session.Close()
+		_ = u.session.Close()
 	}
 	u.stopOnce.Do(func() {
 		u.Fds.lockMutations(ErrUpgraderStopped)
 		// Interrupt any running Upgrade(), and
 		// prevent new upgrade from happening.
-		u.upgradeSock.Close()
+		_ = u.upgradeSock.Close()
 		select {
 		case <-u.upgradeCompleteC:
 		default:

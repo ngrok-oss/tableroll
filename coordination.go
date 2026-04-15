@@ -3,13 +3,13 @@ package tableroll
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/euank/filelock"
-	"github.com/inconshreveable/log15"
 	"github.com/pkg/errors"
 	"k8s.io/utils/clock"
 )
@@ -29,14 +29,14 @@ type coordinator struct {
 	lock *filelock.FileLock
 	dir  string
 	id   string
-	l    log15.Logger
+	l    *slog.Logger
 
 	// mocks
 	clock clock.Clock
 }
 
-func newCoordinator(clock clock.Clock, l log15.Logger, dir string, id string) *coordinator {
-	l = l.New("dir", dir)
+func newCoordinator(clock clock.Clock, l *slog.Logger, dir string, id string) *coordinator {
+	l = l.With("dir", dir)
 	coord := &coordinator{dir: dir, l: l, clock: clock, id: id}
 	return coord
 }
@@ -52,8 +52,10 @@ func (c *coordinator) Listen(ctx context.Context) (*net.UnixListener, error) {
 
 func touchFile(path string) error {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDONLY, 0o755)
-	f.Close()
-	return err
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }
 
 // Lock takes an exclusive lock on the given coordination directory.  If the

@@ -12,7 +12,7 @@ func tmpDir(t *testing.T) string {
 		panic(err)
 	}
 	t.Cleanup(func() {
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 	})
 	return dir
 }

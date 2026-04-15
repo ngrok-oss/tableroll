@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"sync"
 	"syscall"
 
-	"github.com/inconshreveable/log15"
+	"log/slog"
+
 	"golang.org/x/sys/unix"
 )
 
@@ -129,7 +131,7 @@ type Fds struct {
 	locked       bool
 	lockedReason error
 
-	l log15.Logger
+	l *slog.Logger
 }
 
 func (f *Fds) String() string {
@@ -141,7 +143,7 @@ func (f *Fds) String() string {
 	return fmt.Sprintf("fds: %v", res)
 }
 
-func newFds(l log15.Logger, inherited map[string]*fd) *Fds {
+func newFds(l *slog.Logger, inherited map[string]*fd) *Fds {
 	if inherited == nil {
 		inherited = make(map[string]*fd)
 	}
@@ -197,13 +199,13 @@ func (f *Fds) Listen(ctx context.Context, id string, cfg *net.ListenConfig, netw
 
 	fdLn, ok := ln.(Listener)
 	if !ok {
-		ln.Close()
+		_ = ln.Close()
 		return nil, fmt.Errorf("%T doesn't implement tableroll.Listener", ln)
 	}
 
 	err = f.addListenerLocked(id, network, addr, fdLn)
 	if err != nil {
-		fdLn.Close()
+		_ = fdLn.Close()
 		return nil, err
 	}
 
@@ -237,11 +239,11 @@ func (f *Fds) ListenWith(id, network, addr string, listenerFunc func(network, ad
 		return nil, err
 	}
 	if _, ok := ln.(Listener); !ok {
-		ln.Close()
+		_ = ln.Close()
 		return nil, fmt.Errorf("%T doesn't implement tableroll.Listener", ln)
 	}
 	if err := f.addListenerLocked(id, network, addr, ln.(Listener)); err != nil {
-		ln.Close()
+		_ = ln.Close()
 		return nil, err
 	}
 	return ln, nil
@@ -311,12 +313,12 @@ func (f *Fds) DialWith(id, network, address string, dialFn func(network, address
 	}
 	fdConn, ok := newConn.(Conn)
 	if !ok {
-		newConn.Close()
+		_ = newConn.Close()
 		return nil, fmt.Errorf("%T doesn't implement tableroll.Conn", newConn)
 	}
 
 	if err := f.addConnLocked(id, fdKindConn, network, address, fdConn); err != nil {
-		newConn.Close()
+		_ = newConn.Close()
 		return nil, err
 	}
 	return newConn, nil
@@ -387,7 +389,7 @@ func (f *Fds) OpenFileWith(id string, name string, openFunc func(name string) (*
 
 	dup, err := dupFile(newFi, id)
 	if err != nil {
-		newFi.Close()
+		_ = newFi.Close()
 		return nil, err
 	}
 
@@ -454,9 +456,7 @@ func (f *Fds) copy() map[string]*fd {
 	defer f.mu.Unlock()
 
 	files := make(map[string]*fd, len(f.fds))
-	for key, file := range f.fds {
-		files[key] = file
-	}
+	maps.Copy(files, f.fds)
 
 	return files
 }

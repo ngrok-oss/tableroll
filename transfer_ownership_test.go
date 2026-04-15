@@ -4,7 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/inconshreveable/log15"
+	"log/slog"
+
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"k8s.io/utils/clock"
@@ -12,7 +13,7 @@ import (
 
 func TestGetFilesCtxCancel(t *testing.T) {
 	ctx := context.Background()
-	l := log15.New()
+	l := slog.Default()
 	tmpdir := tmpDir(t)
 	parent := newCoordinator(clock.RealClock{}, l, tmpdir, "1")
 	_, err := parent.Listen(ctx)
