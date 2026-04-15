@@ -54,7 +54,7 @@ func TestConnectOwner(t *testing.T) {
 // canceled by canceling the passed in context.
 func TestLockCoordinationDirCtxCancel(t *testing.T) {
 	l := slog.Default()
-	ctx := testCtx(t)
+	ctx := t.Context()
 	tmpdir := tmpDir(t)
 	coord1 := newCoordinator(clock.RealClock{}, l, tmpdir, "1")
 	coord2 := newCoordinator(clock.RealClock{}, l, tmpdir, "2")

@@ -1,7 +1,6 @@
 package tableroll
 
 import (
-	"context"
 	"os"
 	"testing"
 )
@@ -15,10 +14,4 @@ func tmpDir(t *testing.T) string {
 		_ = os.RemoveAll(dir)
 	})
 	return dir
-}
-
-func testCtx(t *testing.T) context.Context {
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	return ctx
 }

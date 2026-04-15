@@ -32,7 +32,7 @@ func loopbackTCPAddr(t *testing.T) string {
 }
 
 func TestBasicProcessUpgrade(t *testing.T) {
-	ctx := testCtx(t)
+	ctx := t.Context()
 	tmpdir := tmpDir(t)
 
 	testAddr := loopbackTCPAddr(t)
@@ -125,7 +125,7 @@ func TestBasicProcessUpgrade(t *testing.T) {
 }
 
 func TestUnixMultiProcessUpgrade(t *testing.T) {
-	ctx := testCtx(t)
+	ctx := t.Context()
 	tmpdir := tmpDir(t)
 
 	sock := filepath.Join(tmpdir, "testsock")
