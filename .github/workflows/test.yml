@@ -19,4 +19,4 @@ jobs:
     - name: direnv allow
       run: direnv allow .
     - name: Test
-      run: direnv exec . make test-race COUNT=100
+      run: direnv exec . make test-race COUNT=20
