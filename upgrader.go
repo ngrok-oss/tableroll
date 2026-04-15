@@ -35,6 +35,7 @@ type Upgrader struct {
 	// is no longer the owner of its Fds.
 	// This also occurs when `Stop` is called.
 	upgradeCompleteC chan struct{}
+	closeUpgradeOnce sync.Once
 
 	l *slog.Logger
 
@@ -201,7 +202,7 @@ func (u *Upgrader) handleUpgradeRequest(conn *net.UnixConn) {
 	// don't care.
 	u.Fds.lockMutations(ErrUpgradeCompleted)
 	_ = u.transitionTo(upgraderStateDraining)
-	close(u.upgradeCompleteC)
+	u.closeUpgradeComplete()
 }
 
 // Ready signals that the current process is ready to accept connections.
@@ -246,6 +247,15 @@ func (u *Upgrader) Ready() error {
 	return nil
 }
 
+// closeUpgradeComplete safely closes the upgradeCompleteC channel exactly once.
+// This is needed because both handleUpgradeRequest and Stop can close the
+// channel, and without synchronization this races.
+func (u *Upgrader) closeUpgradeComplete() {
+	u.closeUpgradeOnce.Do(func() {
+		close(u.upgradeCompleteC)
+	})
+}
+
 // UpgradeComplete returns a channel which is closed when the managed file
 // descriptors have been passed to the next process, and the next process has
 // indicated it is ready.
@@ -265,10 +275,6 @@ func (u *Upgrader) Stop() {
 		// Interrupt any running Upgrade(), and
 		// prevent new upgrade from happening.
 		_ = u.upgradeSock.Close()
-		select {
-		case <-u.upgradeCompleteC:
-		default:
-			close(u.upgradeCompleteC)
-		}
+		u.closeUpgradeComplete()
 	})
 }
